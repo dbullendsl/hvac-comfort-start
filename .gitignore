@@ -1,0 +1,15 @@
+# Pyscript runtime data
+pyscript/data/*
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Home Assistant local state
+.storage/
+.secrets.yaml
+
+# OS noise
+.DS_Store
+Thumbs.db
+
