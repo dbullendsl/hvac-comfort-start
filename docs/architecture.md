@@ -27,7 +27,7 @@ Key goals:
 ## High-Level Architecture
 
 The system is divided into three independent but coordinated layers:
-'''
+```
 
 +-------------------+
 | Planning |
@@ -45,7 +45,7 @@ v
 | Learning |
 | (Arrival Eval) |
 +-------------------+
-'''
+```
 
 Each layer has a single responsibility and minimal coupling to the others.
 
