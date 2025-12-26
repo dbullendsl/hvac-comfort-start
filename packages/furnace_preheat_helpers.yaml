@@ -1,0 +1,43 @@
+homeassistant:
+  customize: {}
+
+input_datetime:
+  preheat_start:
+    name: Preheat Start
+    has_date: false
+    has_time: true
+  comfort_time:
+    name: Comfort Time
+    has_date: false
+    has_time: true
+
+input_number:
+  preheat_min_lead:
+    name: Min Preheat Lead (min)
+    min: 0
+    max: 240
+    step: 1
+    unit_of_measurement: min
+    icon: mdi:timer-outline
+  preheat_max_lead:
+    name: Max Preheat Lead (min)
+    min: 0
+    max: 480
+    step: 1
+    unit_of_measurement: min
+    icon: mdi:timer-cog
+  preheat_unoccupied_cap:
+    name: Unoccupied Lead Cap (min)
+    min: 0
+    max: 240
+    step: 1
+    unit_of_measurement: min
+    icon: mdi:home-off
+input_text:
+  furnace_model_json:
+    name: Furnace Model (JSON)
+    max: 255
+input_boolean:
+  preheat_active:
+    name: Preheat Active
+    icon: mdi:fire-alert

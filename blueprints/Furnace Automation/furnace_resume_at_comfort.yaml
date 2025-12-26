@@ -1,0 +1,68 @@
+blueprint:
+  name: Furnace — Resume/Verify at Comfort Time (v4, patched)
+  description: At comfort time, ensure target is met and resume normal schedule.
+  domain: automation
+  input:
+    climate:
+      name: Climate entity
+      selector:
+        entity:
+          domain: climate
+    comfort_time:
+      name: Comfort Time helper (input_datetime.comfort_time)
+      selector:
+        entity:
+          domain: input_datetime
+    target_temp:
+      name: Target temperature
+      default: 74
+      selector:
+        number:
+          min: 50
+          max: 80
+          step: 0.5
+          unit_of_measurement: "°F"
+
+variables:
+  target_temp_var: !input target_temp
+
+trigger:
+  - platform: time
+    at: !input comfort_time
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ states('sensor.indoor_temperature')|float(0) < (target_temp_var|float - 0.5) }}
+        sequence:
+          # We are below target -> stay in heat and enforce setpoint
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: !input climate
+            data:
+              hvac_mode: heat
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate
+            data:
+              temperature: "{{ target_temp_var }}"
+    default:
+      # We are at/above target -> resume auto/normal schedule
+      - service: climate.set_hvac_mode
+        target:
+          entity_id: !input climate
+        data:
+          hvac_mode: heat
+
+  # These always run after the choose/default
+  - service: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.preheat_active
+  - service: pyscript.furnace_preheat_evaluate_arrival
+    data: {}
+  - service: pyscript.furnace_preheat_recompute
+    data: {}
+
+mode: single
