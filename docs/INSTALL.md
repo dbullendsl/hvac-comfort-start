@@ -25,11 +25,10 @@ This repository maps to Home Assistant’s config folders like this:
 
 | Repo path | Home Assistant path |
 |---|---|
+| `blueprints/Furnace Automation` | 'blueprints/automation/Furnace Automation` |
+| `packages/furnace_preheat_helpers.yaml` | `/config/packages/furnace_preheat_helpers.yaml |
 | `pyscript/furnace_preheat.py` | `/config/pyscript/furnace_preheat.py` |
-| `pyscript/data/` | `/config/pyscript/data/` |
 | `pyscript_modules/furnace_config_io.py` | `/config/pyscript_modules/furnace_config_io.py` |
-| `blueprints/*.yaml` | `/config/blueprints/automation/` (or import via UI) |
-| `helpers/helpers.yaml` | Include in your HA config (see below) |
 
 ---
 
@@ -41,8 +40,11 @@ This repository maps to Home Assistant’s config folders like this:
 2. Copy `pyscript_modules/furnace_config_io.py` to:
    - `/config/pyscript_modules/furnace_config_io.py`
 
-3. Ensure the data directory exists:
-   - `/config/pyscript/data/`
+3. Copy 'blueprints/Furnace Automations/*.yaml to:
+    - /config/blueprints/automation/Furnace Automations`
+
+4. Copy 'packages/*.yaml to:
+    - /config/packages`
 
 ---
 
@@ -50,13 +52,10 @@ This repository maps to Home Assistant’s config folders like this:
 
 Open `helpers/helpers.yaml` from this repo and apply it in Home Assistant using one of the following approaches:
 
-### Option A (Recommended): YAML package
+### (Recommended): YAML package
 - Put the file under your packages folder, for example:
   - `/config/packages/furnace_preheat_helpers.yaml`
 - Ensure packages are enabled in configuration.
-
-### Option B: Merge into existing helper YAML
-- If you already manage helpers in YAML, copy the helper definitions into your existing helper file(s).
 
 After adding helpers:
 - Restart Home Assistant (or reload YAML where applicable).
@@ -125,7 +124,6 @@ After copying the code:
 
 - Beta 9 is tuned to prefer slight earliness over lateness.
 - Do not manually run arrival evaluation outside the comfort-time window.
-- Runtime files under `/config/pyscript/data/` should not be committed to Git.
 
 ---
 
