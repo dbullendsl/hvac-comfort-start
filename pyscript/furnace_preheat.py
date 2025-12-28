@@ -372,6 +372,29 @@ async def furnace_preheat_recompute():
     comfort_today = _mk_on(now, comfort)
     comfort_dt = comfort_today if comfort_today > now else _mk_on(now + timedelta(days=1), comfort)
 
+    # --- Freeze guard: avoid moving preheat_start once we are close to it ---
+    existing_start_s = _entity(cfg["preheat"])
+    if existing_start_s:
+        try:
+            hh, mm, ss = [int(x) for x in existing_start_s.split(":")]
+            existing_start_dt = comfort_dt.replace(
+                hour=hh, minute=mm, second=ss, microsecond=0
+            )
+    
+            # If the stored start appears after comfort, interpret it as "today"
+            if existing_start_dt > comfort_dt:
+                existing_start_dt -= timedelta(days=1)
+    
+            freeze_window_min = 15  # minutes before start to freeze
+            if datetime.now() >= (existing_start_dt - timedelta(minutes=freeze_window_min)):
+                log.info(
+                    "furnace_preheat: recompute skipped (freeze window). existing_start=%s"
+                    % existing_start_dt.strftime("%H:%M:%S")
+                )
+                return
+        except Exception as e:
+            log.debug(f"furnace_preheat: freeze guard skipped: {e}")
+    
     model = _get_model()
     k = float(model.get("k", DEFAULT_MODEL["k"]))
     offset_min = float(model.get("offset_min", 0.0))
