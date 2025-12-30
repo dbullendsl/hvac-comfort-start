@@ -37,7 +37,7 @@ action:
             value_template: >-
               {{ states('sensor.indoor_temperature')|float(0) < (target_temp_var|float - 0.5) }}
         sequence:
-          # We are below target -> stay in heat and enforce setpoint
+          # Below target -> stay in heat and enforce setpoint
           - service: climate.set_hvac_mode
             target:
               entity_id: !input climate
@@ -49,20 +49,20 @@ action:
             data:
               temperature: "{{ target_temp_var }}"
     default:
-      # We are at/above target -> resume auto/normal schedule
+      # At/above target -> resume auto/normal schedule
       - service: climate.set_hvac_mode
         target:
           entity_id: !input climate
         data:
-          hvac_mode: heat
+          hvac_mode: auto
 
-  # These always run after the choose/default
+  # Beta 9: evaluate arrival while preheat_active is still ON (enables k_cycle)
+  - service: pyscript.furnace_preheat_evaluate_arrival
+    data: {}
+
+  # End preheat after evaluation
   - service: input_boolean.turn_off
     target:
       entity_id: input_boolean.preheat_active
-  - service: pyscript.furnace_preheat_evaluate_arrival
-    data: {}
-  - service: pyscript.furnace_preheat_recompute
-    data: {}
 
 mode: single
