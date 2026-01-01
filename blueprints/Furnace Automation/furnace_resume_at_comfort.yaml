@@ -49,12 +49,12 @@ action:
             data:
               temperature: "{{ target_temp_var }}"
     default:
-      # At/above target -> resume auto/normal schedule
+      # At/above target -> resume heat mode schedule
       - service: climate.set_hvac_mode
         target:
           entity_id: !input climate
         data:
-          hvac_mode: auto
+          hvac_mode: heat
 
   # Beta 9: evaluate arrival while preheat_active is still ON (enables k_cycle)
   - service: pyscript.furnace_preheat_evaluate_arrival
