@@ -1,5 +1,5 @@
 blueprint:
-  name: Furnace — Resume/Verify at Comfort Time (v4, patched)
+  name: Furnace — Resume/Verify at Comfort Time (v4, RC1 target helper)
   description: At comfort time, ensure target is met and resume normal schedule.
   domain: automation
   input:
@@ -8,23 +8,23 @@ blueprint:
       selector:
         entity:
           domain: climate
+
     comfort_time:
       name: Comfort Time helper (input_datetime.comfort_time)
       selector:
         entity:
           domain: input_datetime
-    target_temp:
-      name: Target temperature
-      default: 74
+
+    target_temp_helper:
+      name: Target temperature helper (input_number)
+      description: Single source of truth for the comfort target temperature.
       selector:
-        number:
-          min: 50
-          max: 80
-          step: 0.5
-          unit_of_measurement: "°F"
+        entity:
+          domain: input_number
 
 variables:
-  target_temp_var: !input target_temp
+  target_temp_entity: !input target_temp_helper
+  target_temp_var: "{{ states(target_temp_entity) | float(0) }}"
 
 trigger:
   - platform: time
@@ -35,7 +35,7 @@ action:
       - conditions:
           - condition: template
             value_template: >-
-              {{ states('sensor.indoor_temperature')|float(0) < (target_temp_var|float - 0.5) }}
+              {{ states('sensor.indoor_temperature')|float(0) < (target_temp_var - 0.5) }}
         sequence:
           # Below target -> stay in heat and enforce setpoint
           - service: climate.set_hvac_mode
