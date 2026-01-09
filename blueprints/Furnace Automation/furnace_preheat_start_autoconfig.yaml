@@ -1,5 +1,5 @@
 blueprint:
-  name: Furnace — Start at Computed Preheat Time (v4, RC1 target helper)
+  name: Furnace — Start at Computed Preheat Time (v4, patched labels)
   description: Start heating at the learned preheat time, with vacation/home/forecast logic.
   domain: automation
   input:
@@ -8,35 +8,30 @@ blueprint:
       selector:
         entity:
           domain: climate
-
     preheat_start:
       name: Preheat Start helper (input_datetime.preheat_start)
       selector:
         entity:
           domain: input_datetime
-
-    target_temp_helper:
-      name: Target temperature helper (input_number)
-      description: Single source of truth for the comfort target temperature.
+    target_temp:
+      name: Target temperature
+      default: 74
       selector:
-        entity:
-          domain: input_number
-
+        number:
+          min: 50
+          max: 80
+          step: 0.5
+          unit_of_measurement: "°F"
     vacation:
       name: Vacation boolean (input_boolean.vacation)
       selector:
         entity:
           domain: input_boolean
-
     occupied:
       name: Occupied binary_sensor (binary_sensor.family_home)
       selector:
         entity:
           domain: binary_sensor
-
-variables:
-  target_temp_entity: !input target_temp_helper
-  target_temp_var: "{{ states(target_temp_entity) | float(0) }}"
 
 trigger:
   - platform: time
@@ -45,13 +40,12 @@ trigger:
 condition:
   - condition: state
     entity_id: !input vacation
-    state: "off"
-
+    state: 'off'
   - condition: or
     conditions:
       - condition: state
         entity_id: !input occupied
-        state: "on"
+        state: 'on'
       - condition: template
         value_template: >-
           {{ states('input_number.preheat_unoccupied_cap')|float(0) > 0 }}
@@ -61,16 +55,14 @@ action:
     target:
       entity_id: !input climate
     data:
-      temperature: "{{ target_temp_var }}"
-
+      temperature: !input target_temp
   - service: climate.set_hvac_mode
     target:
       entity_id: !input climate
     data:
       hvac_mode: heat
-
   - service: input_boolean.turn_on
-    target:
-      entity_id: input_boolean.preheat_active
+    target: { entity_id: input_boolean.preheat_active }
+  
 
 mode: single

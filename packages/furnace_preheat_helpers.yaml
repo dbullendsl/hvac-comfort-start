@@ -33,15 +33,6 @@ input_number:
     step: 1
     unit_of_measurement: min
     icon: mdi:home-off
-  hvac_comfort_start_target_temp:
-    name: HVAC Comfort Target Temperature
-    min: 50
-    max: 80
-    step: 0.5
-    unit_of_measurement: "°F"
-    icon: mdi:thermometer
-    
-
 input_text:
   furnace_model_json:
     name: Furnace Model (JSON)

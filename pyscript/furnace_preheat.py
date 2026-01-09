@@ -62,135 +62,35 @@ def _entity_onoff(eid, default_off=True):
 # Config loading (from JSON file via executor)
 #
 
-import re
-
-_TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
-
-
-def _clean_entity_id(val, default):
-    """Return a usable entity_id string or default."""
-    try:
-        if val is None:
-            return default
-        s = str(val).strip()
-        if not s:
-            return default
-        if s.lower() in ("none", "null", "unknown", "unavailable"):
-            return default
-        return s
-    except Exception:
-        return default
-
-def _resolve_active_hours(cfg):
-    default = ["03:00:00", "23:00:00"]
-    raw = cfg.get("active_hours", default)
-
-    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
-        log.warning("furnace_preheat: invalid active_hours (expected 2-item list); using default %s", default)
-        return default
-
-    start, end = raw[0], raw[1]
-    if not (isinstance(start, str) and isinstance(end, str) and _TIME_RE.match(start) and _TIME_RE.match(end)):
-        log.warning("furnace_preheat: invalid active_hours values %s; using default %s", raw, default)
-        return default
-
-    return [start, end]
-
-
-def _resolve_forecast_hours(cfg):
-    default = 8
-    raw = cfg.get("forecast_hours_ahead", default)
-    try:
-        val = int(raw)
-    except Exception:
-        log.warning("furnace_preheat: invalid forecast_hours_ahead=%r; using default %d", raw, default)
-        return default
-
-    # Clamp to sane bounds for RC1
-    val = max(1, min(val, 48))
-    return val
-
-
-def _resolve_target_temp(cfg):
-    """Resolve target temperature with RC1 precedence:
-       1) Helper (authoritative)
-       2) Legacy JSON (numeric only)
-       3) Hard default
-    """
-    helper = "input_number.hvac_comfort_start_target_temp"
-
-    # 1) Preferred: helper
-    try:
-        v = state.get(helper)
-        if v not in (None, "unknown", "unavailable", ""):
-            return float(v), "helper"
-    except Exception:
-        pass
-
-    # 2) Legacy JSON fallback (numeric only)
-    legacy = cfg.get("target_temp")
-    if isinstance(legacy, (int, float)):
-        return float(legacy), "legacy_config"
-
-    # 3) Absolute fallback
-    return 74.0, "default"
-    
 async def _load_cfg():
-    """Load config via native module in the executor and return a normalized dict.
-
-    RC1 notes:
-    - Target temperature is resolved primarily from the helper
-      input_number.hvac_comfort_start_target_temp (single source of truth).
-    - furnace_preheat_config.json target_temp is legacy and used only if numeric.
-    """
-    # Centralized defaults (keeps entity IDs consistent and easy to update)
-    defaults = {
-        "climate": "climate.daikin",
-        "indoor": "sensor.indoor_temperature",
-        "outdoor": "sensor.main_room_outdoor_air_temperature",
-        "forecast_low": "sensor.nws_overnight_low_temperature",
-        "occupied": "binary_sensor.family_home",
-        "vacation": "input_boolean.vacation",
-        "comfort": "input_datetime.comfort_time",
-        "preheat": "input_datetime.preheat_start",
-        "min_lead": "input_number.preheat_min_lead",
-        "max_lead": "input_number.preheat_max_lead",
-        "unocc_cap": "input_number.preheat_unoccupied_cap",
-    }
-
+    """Load config via native module in the executor."""
     try:
         cfg = await hass.async_add_executor_job(furnace_config_io.load_config)
     except Exception as e:
         log.error(f"furnace_preheat: error loading config file: {e}")
         cfg = {}
 
-    target, target_source = _resolve_target_temp(cfg)
-    log.debug(
-        "furnace_preheat: resolved target temperature = %.1fF (source=%s)",
-        target,
-        target_source,
-    )
-
     return {
-        "climate": _clean_entity_id(cfg.get("climate"), defaults["climate"]),
-        "indoor": _clean_entity_id(cfg.get("indoor_temp"), defaults["indoor"]),
-        "outdoor": _clean_entity_id(cfg.get("outdoor_temp"), defaults["outdoor"]),
+        "climate": cfg.get("climate", "climate.daikin"),
+        "indoor": cfg.get("indoor_temp", "sensor.indoor_temperature"),
+        "outdoor": cfg.get("outdoor_temp", "sensor.main_room_outdoor_air_temperature"),
 
-        "forecast_low": _clean_entity_id(cfg.get("forecast_low"), defaults["forecast_low"]),
-        "occupied": _clean_entity_id(cfg.get("occupied_binary"), defaults["occupied"]),
-        "vacation": _clean_entity_id(cfg.get("vacation"), defaults["vacation"]),
+        "forecast_low": cfg.get("forecast_low", "sensor.nws_overnight_low_temperature"),
+        "occupied": cfg.get("occupied_binary", "binary_sensor.family_home"),
+        "vacation": cfg.get("vacation", "input_boolean.vacation"),
 
-        "comfort": _clean_entity_id(cfg.get("comfort_time"), defaults["comfort"]),
-        "preheat": _clean_entity_id(cfg.get("preheat_start"), defaults["preheat"]),
+        "comfort": cfg.get("comfort_time", "input_datetime.comfort_time"),
+        "preheat": cfg.get("preheat_start", "input_datetime.preheat_start"),
 
-        "target": target,
-        "active_hours": _resolve_active_hours(cfg),
+        "target": float(cfg.get("target_temp", 74)),
+        "active_hours": cfg.get("active_hours", ["03:00:00", "23:00:00"]),
 
-        "forecast_hours": _resolve_forecast_hours(cfg),
-        "min_lead": _clean_entity_id(cfg.get("min_lead"), defaults["min_lead"]),
-        "max_lead": _clean_entity_id(cfg.get("max_lead"), defaults["max_lead"]),
-        "unocc_cap": _clean_entity_id(cfg.get("unocc_cap"), defaults["unocc_cap"]),
+        "forecast_hours": int(cfg.get("forecast_hours_ahead", 8)),
+        "min_lead": cfg.get("min_lead", "input_number.preheat_min_lead"),
+        "max_lead": cfg.get("max_lead", "input_number.preheat_max_lead"),
+        "unocc_cap": cfg.get("unocc_cap", "input_number.preheat_unoccupied_cap"),
     }
+
 
 #
 # Model storage in input_text.furnace_model_json
