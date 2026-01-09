@@ -1,0 +1,68 @@
+blueprint:
+  name: Furnace — Resume/Verify at Comfort Time (v4, RC1 target helper)
+  description: At comfort time, ensure target is met and resume normal schedule.
+  domain: automation
+  input:
+    climate:
+      name: Climate entity
+      selector:
+        entity:
+          domain: climate
+
+    comfort_time:
+      name: Comfort Time helper (input_datetime.comfort_time)
+      selector:
+        entity:
+          domain: input_datetime
+
+    target_temp_helper:
+      name: Target temperature helper (input_number)
+      description: Single source of truth for the comfort target temperature.
+      selector:
+        entity:
+          domain: input_number
+
+variables:
+  target_temp_entity: !input target_temp_helper
+  target_temp_var: "{{ states(target_temp_entity) | float(0) }}"
+
+trigger:
+  - platform: time
+    at: !input comfort_time
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ states('sensor.indoor_temperature')|float(0) < (target_temp_var - 0.5) }}
+        sequence:
+          # Below target -> stay in heat and enforce setpoint
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: !input climate
+            data:
+              hvac_mode: heat
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate
+            data:
+              temperature: "{{ target_temp_var }}"
+    default:
+      # At/above target -> resume heat mode schedule
+      - service: climate.set_hvac_mode
+        target:
+          entity_id: !input climate
+        data:
+          hvac_mode: heat
+
+  # Beta 9: evaluate arrival while preheat_active is still ON (enables k_cycle)
+  - service: pyscript.furnace_preheat_evaluate_arrival
+    data: {}
+
+  # End preheat after evaluation
+  - service: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.preheat_active
+
+mode: single
