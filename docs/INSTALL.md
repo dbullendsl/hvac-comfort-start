@@ -1,4 +1,4 @@
-# HVAC Comfort Start — Installation Guide (Beta 9)
+# HVAC Comfort Start — Installation Guide (RC1)
 
 This guide walks through installing **HVAC Comfort Start — Adaptive Preheat** into an existing Home Assistant system using Pyscript.
 
@@ -48,12 +48,12 @@ Use this directory when copying files into Home Assistant in the steps below.
 
 ## Files and Locations
 
-| Repo path | Home Assistant path |
-|---|---|
-| `blueprints/Furnace Automations/*.yaml` | `/config/blueprints/automation/Furnace Automations/` |
-| `packages/furnace_preheat_helpers.yaml` | `/config/packages/furnace_preheat_helpers.yaml` |
-| `pyscript/furnace_preheat.py` | `/config/pyscript/furnace_preheat.py` |
-| `pyscript_modules/furnace_config_io.py` | `/config/pyscript_modules/furnace_config_io.py` |
+| Repository Path                                   | Home Assistant Path                                      |
+|--------------------------------------------------|----------------------------------------------------------|
+| `blueprints/Furnace Automations/*.yaml`          | `/config/blueprints/automation/Furnace Automations/`    |
+| `packages/furnace_preheat_helpers.yaml`          | `/config/packages/furnace_preheat_helpers.yaml`          |
+| `pyscript/furnace_preheat.py`                    | `/config/pyscript/furnace_preheat.py`                    |
+| `pyscript_modules/furnace_config_io.py`          | `/config/pyscript_modules/furnace_config_io.py`          |
 
 ---
 
@@ -101,20 +101,29 @@ Check the log for errors. A clean reload should produce no exceptions.
 
 ---
 
-## Step 4 — Import and Configure the Blueprint
+## Step 4 — Import and Configure the Blueprints
 
 1. Go to **Settings → Automations & Scenes → Blueprints**
 2. Import the blueprint(s) from:
    ```
    blueprints/Furnace Automations/
    ```
-3. Create a new automation from the blueprint.
+3. Create automations from the blueprints.
 4. Select:
    - Your thermostat entity
    - Comfort time helper
-   - Target temperature
+   - Preheat start helper
+   - Occupancy / vacation helpers (if used)
 
-This automation is responsible for **starting preheat** and **evaluating arrival**.
+### Target Temperature (RC1)
+
+In RC1, the target temperature is defined **once** using:
+
+```
+input_number.hvac_comfort_start_target_temp
+```
+
+This helper is the **single source of truth** used by both the blueprints and the Pyscript logic.
 
 ---
 
@@ -122,7 +131,7 @@ This automation is responsible for **starting preheat** and **evaluating arrival
 
 Overnight, you should see logs similar to:
 
-- Recompute planning (between 02:00–07:00)
+- Recompute planning (typically between 02:00–07:00)
 - Preheat start captured
 - Arrival evaluation at comfort time
 
@@ -130,16 +139,16 @@ Example log entries:
 
 ```
 furnace_preheat: captured preheat start at 04:15:00 indoor=68.3F
-furnace_preheat: arrival eval indoor=74.1F target=74.0F ...
+furnace_preheat: arrival eval indoor=72.1F target=72.0F ...
 ```
 
 ---
 
 ## Notes
 
-- This project does **not** require `/config/pyscript/data/` in Beta 9.
-- Learning is intentionally conservative to support **modulating HVAC systems**.
-- Minor day-to-day variation is normal during seasonal transitions.
+- RC1 does **not** require `/config/pyscript/data/`
+- Learning is intentionally conservative to support **modulating HVAC systems**
+- Minor day-to-day variation is normal during seasonal transitions
 
 ---
 
@@ -148,13 +157,13 @@ furnace_preheat: arrival eval indoor=74.1F target=74.0F ...
 - If preheat does not start, verify:
   - `input_boolean.preheat_active`
   - `input_datetime.preheat_start`
-  - The automation created from the blueprint
-- If Pyscript fails to reload, check indentation and log output.
+  - The automations created from the blueprints
+- If Pyscript fails to reload, check indentation and log output
 
 ---
 
 ## Version
 
-- **HVAC Comfort Start — Beta 9**
-- Stable beta release
-- Designed for hands-off operation once installed
+- **HVAC Comfort Start — RC1**
+- Feature complete; maintenance mode
+- Derived from the proven Beta 9 control baseline
