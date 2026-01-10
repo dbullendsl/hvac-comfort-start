@@ -159,5 +159,5 @@ This project follows a pragmatic versioning approach:
 - **Release Candidate (RC)**: Feature-complete with conservative defaults
 - **Stable**: Minimal configuration, documented behavior
 
-Current version: **Beta 9**
+Current version: **RC1-003**
 
