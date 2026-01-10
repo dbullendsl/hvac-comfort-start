@@ -68,5 +68,5 @@ Stable beta release. Core control logic validated in a real production environme
 ---
 
 ## Previous Betas
-Earlier beta iterations were experimental and are superseded by Beta 9.
+Earlier beta iterations were experimental and are superseded by RC1.
 
