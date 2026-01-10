@@ -1,5 +1,34 @@
 # Changelog
 
+## HVAC Comfort Start — Release Candidate 1 (RC1)
+
+### Status
+Feature complete. Control logic frozen. Entering maintenance mode.
+
+### RC1-001 — Helper Standardization
+- Externalized all user-tunable parameters into Home Assistant helpers
+- Established a single authoritative target temperature helper
+- Consolidated helper definitions into a dedicated package file
+- Eliminated duplicated configuration inputs
+
+### RC1-002 — Blueprint Cleanup
+- Removed duplicate target temperature inputs from automations
+- Standardized blueprint behavior around shared helpers
+- Improved separation between planning, execution, and learning automations
+- Reduced user configuration error surface
+
+### RC1-003 — Pyscript Configuration Hardening
+- Target temperature resolution now prioritizes helper values
+- Legacy JSON configuration treated as numeric fallback only
+- Hardened config parsing to prevent `"None"` string coercion
+- Improved runtime diagnostics via effective configuration dump
+
+### Notes
+- RC1 is built directly on the Beta 9 control model
+- No changes were made to the core learning or planning algorithms
+- Behavior and convergence characteristics are intentionally preserved
+
+
 ## HVAC Comfort Start — Beta 9
 
 ### Status

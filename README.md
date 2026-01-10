@@ -1,12 +1,12 @@
 # HVAC Comfort Start — Adaptive Preheat
 
-**Status:** Stable Beta (Beta 9)  
+**Status:** Release Candidate 1 (RC1) — feature complete, maintenance mode  
 **Platform:** Home Assistant (Pyscript-based)  
-**Target Systems:** Gas / modulating furnaces and similar HVAC systems
+**Compatibility:** Thermostat-agnostic (`climate` entity based)
 
 HVAC Comfort Start is an adaptive preheat controller for Home Assistant that learns how long your HVAC system actually needs to reach a desired comfort temperature and automatically schedules preheating so the target temperature is reached *at* the configured comfort time.
 
-This project is designed for real-world systems where fixed schedules and static offsets consistently arrive too early or too late.
+This project is optimized for real-world systems where static schedules and fixed offsets consistently arrive too early or too late.
 
 ---
 
@@ -18,6 +18,36 @@ This project is designed for real-world systems where fixed schedules and static
 - Persistent model state across restarts
 - Designed to prefer slight earliness over lateness
 - Validated on a real modulating furnace
+
+---
+
+## Thermostat & System Compatibility
+
+HVAC Comfort Start is **thermostat-agnostic**.
+
+It works with **any Home Assistant–integrated thermostat** that exposes a standard `climate` entity and supports:
+
+- `hvac_mode` control (e.g., `heat`, `heat_cool`)
+- a controllable target temperature
+- a readable indoor temperature sensor
+
+### Supported HVAC System Types
+
+Because control is abstracted at the Home Assistant level, HVAC Comfort Start can be used with:
+
+- Gas furnaces (single-stage, multi-stage, or modulating)
+- Electric baseboard heating
+- Radiant floor or panel systems
+- Heat pumps (air-source or ground-source)
+- Hybrid systems managed by a single HA `climate` entity
+
+The algorithm does **not** assume:
+- fuel type
+- heat source
+- staging behavior
+- thermostat brand
+
+All learning is derived from **observed temperature response**, not equipment metadata.
 
 ---
 
@@ -62,17 +92,19 @@ The system separates the problem into three parts:
 
 ---
 
-## Current Beta Status (Beta 9)
+## Release Candidate 1 (RC1) Status
 
-This release represents a **stable and validated control loop**:
+RC1 represents a **feature-complete and stable implementation** intended for long-term personal use and conservative maintenance.
 
-- Persistent late arrival has been eliminated.
-- Learning converges reliably across days.
-- Control logic is robust against restarts and manual intervention.
-- Recompute runs frequently overnight to avoid stale assumptions.
-- Cycle-based learning is guarded to prevent invalid data injection.
+Key RC1 characteristics:
 
-Feature enhancements are intentionally deferred until the Release Candidate phase.
+- All user-facing tuning is externalized via helpers
+- Target temperature is defined once and shared consistently
+- Control logic is robust against restarts and partial state
+- Configuration parsing is hardened against invalid or missing values
+- Core learning and control behavior is frozen
+
+Future development, if any, is expected to be incremental rather than architectural.
 
 ---
 
@@ -104,6 +136,18 @@ Exact helper definitions are documented in the repository.
 
 This project directly controls HVAC behavior.  
 Use at your own risk and validate behavior carefully in your environment before relying on it for critical comfort or safety needs.
+
+---
+
+## Maintenance Mode
+
+As of RC1, this project is considered **feature complete** for its intended use case.
+
+- No major new features are planned
+- Breaking changes are not expected
+- Updates may occur to maintain compatibility with Home Assistant or Pyscript
+
+The project remains public primarily for reference and reuse by others with similar requirements.
 
 ---
 
