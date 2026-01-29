@@ -1,6 +1,3 @@
-# Pyscript runtime data
-pyscript/data/*
-
 # Python artifacts
 __pycache__/
 *.pyc
