@@ -1,13 +1,16 @@
 # HVAC Comfort Start — Adaptive Preheat
-# Version: Beta 9
-# Status: Stable beta (validated on modulating furnace)
-# Notes:
-# - Uses cycle-based learning and asymmetric offset correction
-# - Designed to prefer slight earliness over lateness
-# - Slope learning (if enabled) is one-sided: it can only increase k (never decrease)
+# Version: RC1-004 (builds on Beta 9 baseline)
+# Status: RC candidate patch for arrival-based learning stop
+#
+# Key RC1-004 changes:
+# - Adds ARRIVAL latch (first-hit) recorded by service furnace_preheat_mark_arrival()
+# - evaluate_arrival() prefers time-based arrival error (minutes vs comfort time)
+# - k_cycle (cycle-effective) uses start->arrival window when ARRIVAL is present
+# - Keeps Beta 9 asymmetric correction and guarded learning behavior
 
 import sys
 import json
+import re
 from datetime import datetime, timedelta
 
 MODULE_PATH = "/config/pyscript_modules"
@@ -18,6 +21,9 @@ import furnace_config_io
 
 # Captured at the moment preheat becomes active (used for cycle-based k)
 CYCLE = {"start_ts": None, "start_t": None}
+
+# RC1-004: ARRIVAL latch captured at first threshold hit (idempotent)
+ARRIVAL = {"ts": None, "t": None, "reason": None}
 
 #
 # Basic state helpers
@@ -62,8 +68,6 @@ def _entity_onoff(eid, default_off=True):
 # Config loading (from JSON file via executor)
 #
 
-import re
-
 _TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
 
 
@@ -80,6 +84,7 @@ def _clean_entity_id(val, default):
         return s
     except Exception:
         return default
+
 
 def _resolve_active_hours(cfg):
     default = ["03:00:00", "23:00:00"]
@@ -134,7 +139,8 @@ def _resolve_target_temp(cfg):
 
     # 3) Absolute fallback
     return 74.0, "default"
-    
+
+
 async def _load_cfg():
     """Load config via native module in the executor and return a normalized dict.
 
@@ -143,7 +149,6 @@ async def _load_cfg():
       input_number.hvac_comfort_start_target_temp (single source of truth).
     - furnace_preheat_config.json target_temp is legacy and used only if numeric.
     """
-    # Centralized defaults (keeps entity IDs consistent and easy to update)
     defaults = {
         "climate": "climate.daikin",
         "indoor": "sensor.indoor_temperature",
@@ -192,6 +197,7 @@ async def _load_cfg():
         "unocc_cap": _clean_entity_id(cfg.get("unocc_cap"), defaults["unocc_cap"]),
     }
 
+
 #
 # Model storage in input_text.furnace_model_json
 #
@@ -238,7 +244,6 @@ def _save_model(model):
 
 @time_trigger("startup")
 def init_model():
-    # Seed model if it's missing/invalid
     cur = _entity("input_text.furnace_model_json")
     if cur in (None, "unknown", "unavailable", ""):
         _save_model(DEFAULT_MODEL)
@@ -251,6 +256,7 @@ def init_model():
 
 #
 # Cycle capture: record the moment preheat becomes active
+# Also clear ARRIVAL latch for the new cycle.
 #
 
 @state_trigger("input_boolean.preheat_active == 'on'")
@@ -258,6 +264,12 @@ async def furnace_preheat_capture_start():
     cfg = await _load_cfg()
     CYCLE["start_ts"] = datetime.now()
     CYCLE["start_t"] = _entity_f(cfg["indoor"])
+
+    # RC1-004: reset arrival latch for new session
+    ARRIVAL["ts"] = None
+    ARRIVAL["t"] = None
+    ARRIVAL["reason"] = None
+
     log.info(
         "furnace_preheat: captured preheat start at %s indoor=%.2fF"
         % (CYCLE["start_ts"].strftime("%H:%M:%S"), CYCLE["start_t"])
@@ -285,57 +297,149 @@ async def furnace_preheat_dump_config():
 
 
 @service
+async def furnace_preheat_mark_arrival(arrival_tolerance: float = 0.3, reason: str = "threshold"):
+    """
+    RC1-004: Latch ARRIVAL exactly once per preheat session.
+
+    Intended to be called by an automation that triggers on indoor temp reaching:
+        indoor >= target - arrival_tolerance
+    """
+    # Idempotent
+    if ARRIVAL["ts"] is not None:
+        return
+
+    cfg = await _load_cfg()
+    indoor = _entity_f(cfg["indoor"])
+    target = float(cfg["target"])
+
+    tol = float(arrival_tolerance) if arrival_tolerance is not None else 0.3
+
+    # Safety: only latch if threshold is actually met right now
+    if indoor < (target - tol):
+        log.debug(
+            "furnace_preheat: mark_arrival ignored (below threshold). indoor=%.2f target=%.2f tol=%.2f"
+            % (indoor, target, tol)
+        )
+        return
+
+    ARRIVAL["ts"] = datetime.now()
+    ARRIVAL["t"] = indoor
+    ARRIVAL["reason"] = str(reason) if reason is not None else "threshold"
+
+    log.info(
+        "furnace_preheat: arrival latched at %s indoor=%.2fF target=%.2fF tol=%.2f (%s)"
+        % (ARRIVAL["ts"].strftime("%H:%M:%S"), indoor, target, tol, ARRIVAL["reason"])
+    )
+
+
+@service
 async def furnace_preheat_evaluate_arrival():
     """
     Called at comfort time by automation.
 
-    - Computes arrival error
-    - Updates offset_min asymmetrically (late fast, early slow, clamp >= 0)
-    - Updates k from full-cycle k_cycle (high-demand gated), with asymmetric EWMA
+    RC1-004 behavior:
+    - If ARRIVAL latch exists, compute arrival time error in minutes vs comfort time,
+      and update offset_min from that time error (late fast, early slow).
+    - Update k from cycle k_cycle using start->arrival window when ARRIVAL exists
+      (prevents post-arrival modulation from contaminating k).
+    - If ARRIVAL is missing (never hit target), fall back to Beta 9 behavior
+      using temperature error at comfort time mapped to minutes via k_used.
     """
     cfg = await _load_cfg()
     model = _get_model()
 
-    indoor = _entity_f(cfg["indoor"])
+    indoor_now = _entity_f(cfg["indoor"])
     target = float(cfg["target"])
 
     k_model = float(model.get("k", DEFAULT_MODEL["k"]))
     offset = float(model.get("offset_min", 0.0))
 
-    error_T = target - indoor  # + => late, - => early
-
-    # Near-comfort guard
+    # Comfort datetime (today or tomorrow) aligned with "now"
     comfort_s = _entity(cfg["comfort"]) or "06:00:00"
     hh, mm, ss = [int(x) for x in comfort_s.split(":")]
     now = datetime.now()
     comfort_dt = now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
 
-    window_min = 5.0
-    near_comfort = abs((now - comfort_dt).total_seconds()) <= window_min * 60.0
+    # If comfort time earlier than now by more than a few minutes, interpret as "today's comfort already passed"
+    # (evaluate_arrival is typically called right at comfort time; this is just defensive.)
+    if comfort_dt < (now - timedelta(minutes=10)):
+        comfort_dt = comfort_dt + timedelta(days=1)
 
-    # Compute cycle-effective k ONLY when it looks like a true preheat ramp
-    preheat_active = _entity_onoff("input_boolean.preheat_active", default_off=True)
+    # Choose evaluation endpoint:
+    # - If ARRIVAL latched, use arrival timestamp and arrival temp
+    # - Otherwise, use now (comfort time) and current indoor temp
+    end_ts = ARRIVAL["ts"] if ARRIVAL["ts"] is not None else now
+    end_t = float(ARRIVAL["t"]) if ARRIVAL["t"] is not None else indoor_now
+
+    # Compute cycle-effective k using start->end window (end is arrival when available)
     k_cycle = None
-    if near_comfort and preheat_active and CYCLE["start_ts"] is not None and CYCLE["start_t"] is not None:
-        minutes = max(1.0, (now - CYCLE["start_ts"]).total_seconds() / 60.0)
+    if CYCLE["start_ts"] is not None and CYCLE["start_t"] is not None:
+        minutes = max(1.0, (end_ts - CYCLE["start_ts"]).total_seconds() / 60.0)
         start_t = float(CYCLE["start_t"])
-        gained = indoor - start_t
+        gained = end_t - start_t
 
         # High-demand gate (avoid modulated/partial-load contaminating k)
         delta_start = max(0.0, target - start_t)
         if delta_start >= 2.0 and minutes >= 15.0 and gained >= 0.5:
             k_cycle = minutes / gained
 
-    # Conservative k for error-to-minutes mapping
+    # Conservative k for error-to-minutes mapping (fallback path)
     k_used = k_model
     if k_cycle is not None:
         k_used = max(k_model, k_cycle)
 
+    # --- RC1-004 primary path: time-based arrival error if ARRIVAL exists ---
+    if ARRIVAL["ts"] is not None:
+        # arrival_offset_min: negative = early, positive = late
+        arrival_offset_min = (ARRIVAL["ts"] - comfort_dt).total_seconds() / 60.0
+        arrival_offset_min = max(-180.0, min(180.0, arrival_offset_min))
+
+        # Asymmetric offset correction: late fast, early slow; clamp >= 0 to prefer slight earliness (Beta 9 behavior)
+        alpha_late = 0.60
+        alpha_early = 0.10
+        alpha_off = alpha_late if arrival_offset_min > 0 else alpha_early
+
+        new_offset = (1 - alpha_off) * offset + alpha_off * arrival_offset_min
+        new_offset = max(0.0, min(180.0, new_offset))
+
+        # Update k from cycle measurement (asymmetric: increase faster, decrease slower)
+        if k_cycle is not None:
+            alpha_up = 0.40
+            alpha_down = 0.08
+            alpha_k = alpha_up if k_cycle > k_model else alpha_down
+
+            k_new = (1 - alpha_k) * k_model + alpha_k * k_cycle
+            k_new = max(2.0, min(60.0, k_new))
+            model["k"] = k_new
+
+        model["offset_min"] = new_offset
+        _save_model(model)
+
+        log.info(
+            "furnace_preheat: arrival eval (time-based) arrival_ts=%s comfort=%s "
+            "arrival_offset_min=%.1f offset_old=%.1f offset_new=%.1f "
+            "k_model=%.2f k_cycle=%s k_used=%.2f"
+            % (
+                ARRIVAL["ts"].strftime("%H:%M:%S"),
+                comfort_dt.strftime("%H:%M:%S"),
+                arrival_offset_min,
+                offset,
+                new_offset,
+                k_model,
+                f"{k_cycle:.2f}" if k_cycle else "n/a",
+                k_used,
+            )
+        )
+        return
+
+    # --- Fallback path: temperature error at comfort time (Beta 9) ---
+    error_T = target - indoor_now  # + => late, - => early (temperature-based)
+
     # If we're within 0.3°, treat as on-time
     if abs(error_T) < 0.3:
         log.info(
-            "furnace_preheat: arrival ok indoor=%.1fF target=%.1fF k_model=%.2f k_cycle=%s offset=%.1f"
-            % (indoor, target, k_model, f"{k_cycle:.2f}" if k_cycle else "n/a", offset)
+            "furnace_preheat: arrival ok (temp-based) indoor=%.1fF target=%.1fF k_model=%.2f k_cycle=%s offset=%.1f"
+            % (indoor_now, target, k_model, f"{k_cycle:.2f}" if k_cycle else "n/a", offset)
         )
         return
 
@@ -343,15 +447,13 @@ async def furnace_preheat_evaluate_arrival():
     error_min = error_T * k_used
     error_min = max(-120.0, min(120.0, error_min))
 
-    # Asymmetric offset correction: late fast, early slow; clamp >= 0 to prefer earliness
-    alpha_late = 0.6
-    alpha_early = 0.1
+    alpha_late = 0.60
+    alpha_early = 0.10
     alpha_off = alpha_late if error_T > 0 else alpha_early
 
     new_offset = (1 - alpha_off) * offset + alpha_off * error_min
     new_offset = max(0.0, min(180.0, new_offset))
 
-    # Update k from cycle measurement (asymmetric: increase faster, decrease slower)
     if k_cycle is not None:
         alpha_up = 0.40
         alpha_down = 0.08
@@ -365,10 +467,10 @@ async def furnace_preheat_evaluate_arrival():
     _save_model(model)
 
     log.info(
-        "furnace_preheat: arrival eval indoor=%.1fF target=%.1fF error_T=%.2fF "
+        "furnace_preheat: arrival eval (temp-based) indoor=%.1fF target=%.1fF error_T=%.2fF "
         "k_model=%.2f k_cycle=%s k_used=%.2f error_min=%.1fm offset_old=%.1f offset_new=%.1f"
         % (
-            indoor,
+            indoor_now,
             target,
             error_T,
             k_model,
@@ -392,6 +494,12 @@ async def learn_from_slope():
 
     # Learn only while actually preheating (avoid daytime maintenance ramps)
     if not _entity_onoff("input_boolean.preheat_active", default_off=True):
+        SAMPLE["last_t"] = None
+        SAMPLE["last_ts"] = None
+        return
+
+    # RC1-004: if ARRIVAL is latched, stop slope learning for the remainder of the session
+    if ARRIVAL["ts"] is not None:
         SAMPLE["last_t"] = None
         SAMPLE["last_ts"] = None
         return
@@ -454,6 +562,8 @@ async def learn_from_slope():
 #
 
 @service
+@time_trigger("cron(0 21 * * *)")      # 21:00 daily
+@time_trigger("cron(30 23 * * *)")     # 23:30 daily
 @time_trigger("cron(*/15 2-7 * * *)")  # every 15 minutes from 02:00–07:59
 async def furnace_preheat_recompute():
     cfg = await _load_cfg()
@@ -477,15 +587,13 @@ async def furnace_preheat_recompute():
     if existing_start_s:
         try:
             hh, mm, ss = [int(x) for x in existing_start_s.split(":")]
-            existing_start_dt = comfort_dt.replace(
-                hour=hh, minute=mm, second=ss, microsecond=0
-            )
-    
+            existing_start_dt = comfort_dt.replace(hour=hh, minute=mm, second=ss, microsecond=0)
+
             # If the stored start appears after comfort, interpret it as "today"
             if existing_start_dt > comfort_dt:
                 existing_start_dt -= timedelta(days=1)
-    
-            freeze_window_min = 15  # minutes before start to freeze
+
+            freeze_window_min = 15
             if datetime.now() >= (existing_start_dt - timedelta(minutes=freeze_window_min)):
                 log.info(
                     "furnace_preheat: recompute skipped (freeze window). existing_start=%s"
@@ -494,7 +602,7 @@ async def furnace_preheat_recompute():
                 return
         except Exception as e:
             log.debug(f"furnace_preheat: freeze guard skipped: {e}")
-    
+
     model = _get_model()
     k = float(model.get("k", DEFAULT_MODEL["k"]))
     offset_min = float(model.get("offset_min", 0.0))
@@ -579,7 +687,6 @@ async def furnace_preheat_log_action_changes(value=None, var_name=None, old_valu
     cfg = await _load_cfg()
     climate_eid = cfg["climate"]
 
-    # Only log when this is the configured climate entity
     if var_name != climate_eid:
         return
 

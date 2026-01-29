@@ -1,0 +1,96 @@
+blueprint:
+  name: HVAC Comfort Start — Stop Learning at Arrival (RC1-004)
+  description: >
+    While a preheat session is active, latch ARRIVAL in pyscript and end preheat as soon as
+    indoor temperature first reaches (target - tolerance).
+  domain: automation
+
+  input:
+    indoor_temp:
+      name: Indoor temperature sensor
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    target_temp_helper:
+      name: Target temperature helper
+      selector:
+        entity:
+          domain: input_number
+
+    preheat_active:
+      name: Preheat active boolean
+      selector:
+        entity:
+          domain: input_boolean
+
+    tolerance:
+      name: Arrival tolerance
+      default: 0.3
+      selector:
+        number:
+          min: 0.0
+          max: 5.0
+          step: 0.1
+          mode: box
+          unit_of_measurement: "°"
+
+    debug_log:
+      name: Debug logging
+      default: false
+      selector:
+        boolean: {}
+
+mode: single
+
+variables:
+  indoor_temp_entity: !input indoor_temp
+  target_temp_entity: !input target_temp_helper
+  preheat_active_entity: !input preheat_active
+  tolerance: !input tolerance
+  debug_log: !input debug_log
+
+  arrived: >-
+    {% set ti = states(indoor_temp_entity) | float(none) %}
+    {% set tt = states(target_temp_entity) | float(none) %}
+    {% if ti is none or tt is none %}
+      false
+    {% else %}
+      {{ ti >= (tt - (tolerance | float(0))) }}
+    {% endif %}
+
+triggers:
+  - trigger: state
+    entity_id: !input indoor_temp
+
+conditions:
+  - condition: state
+    entity_id: !input preheat_active
+    state: "on"
+  - condition: template
+    value_template: "{{ arrived }}"
+
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ debug_log }}"
+        sequence:
+          - action: logbook.log
+            data:
+              name: "HVAC Comfort Start"
+              message: >-
+                ARRIVAL reached. Indoor={{ states(indoor_temp_entity) }},
+                Target={{ states(target_temp_entity) }}, Tol={{ tolerance }}.
+                Signaling pyscript and ending preheat.
+              entity_id: "{{ preheat_active_entity }}"
+
+  - action: pyscript.furnace_preheat_mark_arrival
+    data:
+      arrival_tolerance: "{{ tolerance | float(0.3) }}"
+      reason: "threshold"
+
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input preheat_active

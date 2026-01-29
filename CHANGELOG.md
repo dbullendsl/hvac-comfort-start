@@ -23,10 +23,35 @@ Feature complete. Control logic frozen. Entering maintenance mode.
 - Hardened config parsing to prevent `"None"` string coercion
 - Improved runtime diagnostics via effective configuration dump
 
+### RC1-004 — HVAC Arrival-Based Learning Stop (First-Hit Freeze)
+
+- Introduced an explicit *arrival stop* mechanism to freeze learning when the comfort target
+  temperature is first reached during an active preheat cycle.
+- Prevents post-arrival modulation / holding behavior from contaminating cycle learning (`k`).
+- Learning window is now strictly bounded to:
+  **preheat start → first arrival at (target − tolerance)**.
+- Arrival is latched once per cycle and treated as idempotent.
+- Comfort-time evaluation now acts as a *finalizer / fallback* only if arrival was not reached.
+- Corrects pathological early-arrival behavior where the system would:
+  - reach target far ahead of comfort time, and
+  - continue learning on low-output hold phases, biasing `k` upward.
+
+**Impact**
+- Eliminates runaway early start times on modulating HVAC systems.
+- Aligns learning objective with user intent: *reach target at comfort time*.
+- No behavior change for systems that do not reach target before comfort time.
+
 ### Notes
 - RC1 is built directly on the Beta 9 control model
 - No changes were made to the core learning or planning algorithms
 - Behavior and convergence characteristics are intentionally preserved
+
+### Naming Note (RC1)
+
+- Blueprint and automation names were updated from **Furnace** to **HVAC** to reflect
+  broader applicability (modulating, non-furnace, future cooling support).
+- Internal file names, paths, and pyscript identifiers remain unchanged in RC1.
+- This is a naming-only change with no functional impact.
 
 
 ## HVAC Comfort Start — Beta 9

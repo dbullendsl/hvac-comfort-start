@@ -4,6 +4,10 @@ This guide walks through installing **HVAC Comfort Start — Adaptive Preheat** 
 
 The system is designed to be **hands-off once installed**, but initial setup requires basic familiarity with Home Assistant configuration files.
 
+Note: Blueprint and automation names may use “HVAC” terminology in the UI.
+Underlying file paths and code identifiers still use legacy “furnace” naming
+for backward compatibility in RC1.
+
 ---
 
 ## Prerequisites
@@ -108,7 +112,7 @@ Check the log for errors. A clean reload should produce no exceptions.
    ```
    blueprints/Furnace Automations/
    ```
-3. Create automations from the blueprints.
+3. Create automations from the HVAC Comfort Start blueprints.
 4. Select:
    - Your thermostat entity
    - Comfort time helper

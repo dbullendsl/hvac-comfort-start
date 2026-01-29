@@ -1,0 +1,307 @@
+blueprint:
+  name: HVAC Comfort Start — Resume/Verify at Comfort Time (v4, RC1 w/ indoor temp selector)
+  description: >
+    At comfort time, verify indoor temperature has reached the target (from an input_number helper).
+    If below target, optionally drive heat to the target, then resume normal HVAC mode/preset.
+    Indoor temperature sensor is selectable (no hard-coded entity).
+  domain: automation
+  input:
+    climate:
+      name: Climate entity
+      selector:
+        entity:
+          domain: climate
+
+    indoor_temp:
+      name: Indoor temperature sensor
+      description: Authoritative indoor temperature sensor used for verification/arrival logic.
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    comfort_time:
+      name: Comfort Time helper
+      description: input_datetime that represents the daily comfort time.
+      selector:
+        entity:
+          domain: input_datetime
+
+    target_temp_helper:
+      name: Target temperature helper
+      description: Single source of truth for the comfort target temperature.
+      selector:
+        entity:
+          domain: input_number
+
+    tolerance:
+      name: Temperature tolerance
+      description: Consider target met when indoor temperature is within this tolerance.
+      default: 0.3
+      selector:
+        number:
+          min: 0.0
+          max: 5.0
+          step: 0.1
+          mode: box
+          unit_of_measurement: "°"
+
+    enforce_heat_if_below:
+      name: Enforce heat if below target
+      description: If enabled, will set HVAC to heat + target until met (or until timeout).
+      default: true
+      selector:
+        boolean: {}
+
+    enforce_timeout_minutes:
+      name: Enforce timeout (minutes)
+      description: Max time to enforce heat while waiting to reach the target.
+      default: 90
+      selector:
+        number:
+          min: 5
+          max: 240
+          step: 5
+          mode: box
+          unit_of_measurement: min
+
+    resume_hvac_mode:
+      name: Resume HVAC mode
+      description: HVAC mode to set after verification/enforcement completes.
+      default: auto
+      selector:
+        select:
+          options:
+            - "auto"
+            - "heat"
+            - "cool"
+            - "off"
+
+    resume_preset_mode:
+      name: Resume preset mode (optional)
+      description: >
+        If your thermostat supports presets (eg 'schedule', 'home', 'none'), set it here.
+        Leave blank to skip preset changes.
+      default: ""
+      selector:
+        text: {}
+
+    debug_log:
+      name: Debug logging
+      description: Writes key decisions to the logbook.
+      default: false
+      selector:
+        boolean: {}
+
+mode: single
+
+variables:
+  climate_entity: !input climate
+  indoor_temp_entity: !input indoor_temp
+  comfort_time_entity: !input comfort_time
+  target_temp_entity: !input target_temp_helper
+
+  tolerance: !input tolerance
+  enforce_heat_if_below: !input enforce_heat_if_below
+  enforce_timeout_minutes: !input enforce_timeout_minutes
+  resume_hvac_mode: !input resume_hvac_mode
+  resume_preset_mode: !input resume_preset_mode
+  debug_log: !input debug_log
+
+  # Values
+  indoor_temp: "{{ states(indoor_temp_entity) | float(none) }}"
+  target_temp: "{{ states(target_temp_entity) | float(none) }}"
+
+  # Internal helper
+  target_met: >-
+    {% set t_in = states(indoor_temp_entity) | float(none) %}
+    {% set t_tgt = states(target_temp_entity) | float(none) %}
+    {% if t_in is none or t_tgt is none %}
+      false
+    {% else %}
+      {{ t_in >= (t_tgt - (tolerance | float(0))) }}
+    {% endif %}
+
+trigger:
+  # Fire daily at the user-selected comfort time.
+  - platform: time
+    at: !input comfort_time
+
+condition: []
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ debug_log }}"
+        sequence:
+          - service: logbook.log
+            data:
+              name: "Comfort Start"
+              message: >-
+                Comfort time reached. Indoor={{ states(indoor_temp_entity) }},
+                Target={{ states(target_temp_entity) }}, Met={{ target_met }},
+                Enforce={{ enforce_heat_if_below }}.
+              entity_id: "{{ climate_entity }}"
+
+  # Validate inputs are numeric
+  - condition: template
+    value_template: >-
+      {{ (states(indoor_temp_entity) | float(none)) is not none
+         and (states(target_temp_entity) | float(none)) is not none }}
+
+  - choose:
+      # If already at/above target, just resume.
+      - conditions:
+          - condition: template
+            value_template: "{{ target_met }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ resume_preset_mode | length > 0 }}"
+                sequence:
+                  - service: climate.set_preset_mode
+                    target:
+                      entity_id: !input climate
+                    data:
+                      preset_mode: "{{ resume_preset_mode }}"
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: !input climate
+            data:
+              hvac_mode: "{{ resume_hvac_mode }}"
+
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ debug_log }}"
+                sequence:
+                  - service: logbook.log
+                    data:
+                      name: "Comfort Start"
+                      message: >-
+                        Target already met. Resuming HVAC mode={{ resume_hvac_mode }}
+                        {% if resume_preset_mode | length > 0 %}preset={{ resume_preset_mode }}{% endif %}.
+                      entity_id: "{{ climate_entity }}"
+
+    default:
+      # Target not met at comfort time.
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ enforce_heat_if_below }}"
+            sequence:
+              # Force heat to target
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: !input climate
+                data:
+                  hvac_mode: heat
+
+              - service: climate.set_temperature
+                target:
+                  entity_id: !input climate
+                data:
+                  temperature: "{{ states(target_temp_entity) | float }}"
+
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ debug_log }}"
+                    sequence:
+                      - service: logbook.log
+                        data:
+                          name: "Comfort Start"
+                          message: >-
+                            Target not met. Enforcing heat to {{ states(target_temp_entity) }}.
+                            Waiting up to {{ enforce_timeout_minutes }} minutes.
+                          entity_id: "{{ climate_entity }}"
+
+              # Wait until target is met or timeout
+              - wait_template: >-
+                  {% set t_in = states(indoor_temp_entity) | float(none) %}
+                  {% set t_tgt = states(target_temp_entity) | float(none) %}
+                  {% if t_in is none or t_tgt is none %}
+                    false
+                  {% else %}
+                    {{ t_in >= (t_tgt - (tolerance | float(0))) }}
+                  {% endif %}
+                timeout:
+                  minutes: !input enforce_timeout_minutes
+                continue_on_timeout: true
+
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ debug_log }}"
+                    sequence:
+                      - service: logbook.log
+                        data:
+                          name: "Comfort Start"
+                          message: >-
+                            Enforcement complete (met={{ target_met }}). Indoor={{ states(indoor_temp_entity) }},
+                            Target={{ states(target_temp_entity) }}. Resuming HVAC mode={{ resume_hvac_mode }}
+                            {% if resume_preset_mode | length > 0 %}preset={{ resume_preset_mode }}{% endif %}.
+                          entity_id: "{{ climate_entity }}"
+
+              # Resume desired mode/preset
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ resume_preset_mode | length > 0 }}"
+                    sequence:
+                      - service: climate.set_preset_mode
+                        target:
+                          entity_id: !input climate
+                        data:
+                          preset_mode: "{{ resume_preset_mode }}"
+
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: !input climate
+                data:
+                  hvac_mode: "{{ resume_hvac_mode }}"
+
+        default:
+          # Not enforcing heat: just resume and log the miss.
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ debug_log }}"
+                sequence:
+                  - service: logbook.log
+                    data:
+                      name: "Comfort Start"
+                      message: >-
+                        Target not met at comfort time, but enforcement disabled.
+                        Indoor={{ states(indoor_temp_entity) }}, Target={{ states(target_temp_entity) }}.
+                        Resuming HVAC mode={{ resume_hvac_mode }}.
+                      entity_id: "{{ climate_entity }}"
+
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ resume_preset_mode | length > 0 }}"
+                sequence:
+                  - service: climate.set_preset_mode
+                    target:
+                      entity_id: !input climate
+                    data:
+                      preset_mode: "{{ resume_preset_mode }}"
+
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: !input climate
+            data:
+              hvac_mode: "{{ resume_hvac_mode }}"
+
+  # --- LEARNING EVALUATION (RC1-004) ---
+  # Always evaluate at comfort time (even if preheat was turned off early by arrival-stop).
+  - service: pyscript.furnace_preheat_evaluate_arrival
+    data: {}
+
+  # Ensure preheat flag is cleared (safe if already off)
+  - service: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.preheat_active
