@@ -3,61 +3,71 @@
 ## HVAC Comfort Start — Release Candidate 1 (RC1)
 
 ### Status
-Feature complete. Control logic frozen. Entering maintenance mode.
+Feature complete. Stable. Learning window finalized.
 
-### RC1-001 — Helper Standardization
-- Externalized all user-tunable parameters into Home Assistant helpers
-- Established a single authoritative target temperature helper
-- Consolidated helper definitions into a dedicated package file
-- Eliminated duplicated configuration inputs
+---
 
-### RC1-002 — Blueprint Cleanup
-- Removed duplicate target temperature inputs from automations
-- Standardized blueprint behavior around shared helpers
-- Improved separation between planning, execution, and learning automations
-- Reduced user configuration error surface
+### RC1-004 — Arrival-Based Learning Stop (First-Hit Freeze)
 
-### RC1-003 — Pyscript Configuration Hardening
-- Target temperature resolution now prioritizes helper values
-- Legacy JSON configuration treated as numeric fallback only
-- Hardened config parsing to prevent `"None"` string coercion
-- Improved runtime diagnostics via effective configuration dump
-
-### RC1-004 — HVAC Arrival-Based Learning Stop (First-Hit Freeze)
-
-- Introduced an explicit *arrival stop* mechanism to freeze learning when the comfort target
+- Introduced an explicit *arrival stop* mechanism to freeze learning when the comfort
   temperature is first reached during an active preheat cycle.
 - Prevents post-arrival modulation / holding behavior from contaminating cycle learning (`k`).
 - Learning window is now strictly bounded to:
-  **preheat start → first arrival at (target − tolerance)**.
+
+  **preheat start → first arrival at (target − tolerance)**
+
 - Arrival is latched once per cycle and treated as idempotent.
-- Comfort-time evaluation now acts as a *finalizer / fallback* only if arrival was not reached.
-- Corrects pathological early-arrival behavior where the system would:
-  - reach target far ahead of comfort time, and
-  - continue learning on low-output hold phases, biasing `k` upward.
+- Comfort-time evaluation now acts as a finalizer / fallback only if arrival was not reached.
+- Eliminates pathological early-arrival bias on modulating HVAC systems.
 
-**Impact**
-- Eliminates runaway early start times on modulating HVAC systems.
+#### Impact
+
+- Prevents runaway early start times.
 - Aligns learning objective with user intent: *reach target at comfort time*.
-- No behavior change for systems that do not reach target before comfort time.
+- Preserves underlying model structure while improving robustness.
 
-### Notes
-- RC1 is built directly on the Beta 9 control model
-- No changes were made to the core learning or planning algorithms
-- Behavior and convergence characteristics are intentionally preserved
+---
 
-### Naming Note (RC1)
+### RC1-003 — Pyscript Configuration Hardening
 
-- Blueprint and automation names were updated from **Furnace** to **HVAC** to reflect
-  broader applicability (modulating, non-furnace, future cooling support).
-- Internal file names, paths, and pyscript identifiers remain unchanged in RC1.
-- This is a naming-only change with no functional impact.
+- Target temperature resolution now prioritizes helper values.
+- Legacy JSON configuration treated as numeric fallback only.
+- Hardened config parsing to prevent `"None"` string coercion.
+- Improved runtime diagnostics via effective configuration dump.
 
+---
+
+### RC1-002 — Blueprint Cleanup
+
+- Removed duplicate target temperature inputs from automations.
+- Standardized blueprint behavior around shared helpers.
+- Improved separation between planning, execution, and learning automations.
+- Reduced user configuration error surface.
+
+---
+
+### RC1-001 — Helper Standardization
+
+- Externalized all user-tunable parameters into Home Assistant helpers.
+- Established a single authoritative target temperature helper.
+- Consolidated helper definitions into a dedicated package file.
+- Eliminated duplicated configuration inputs.
+
+---
+
+### Naming Changes (RC1)
+
+- Blueprint and automation names updated from **Furnace** to **HVAC** to reflect
+  broader applicability (modulating systems, non-furnace heating, future cooling support).
+- Internal file names and pyscript identifiers remain unchanged.
+- Naming change only; no functional impact.
+
+---
 
 ## HVAC Comfort Start — Beta 9
 
 ### Status
-Stable beta release. Core control logic validated in a real production environment.
+Stable beta release. Core control logic validated in production.
 
 ### Added
 - Cycle-based effective heating rate learning (`k_cycle`)
@@ -80,18 +90,18 @@ Stable beta release. Core control logic validated in a real production environme
 - Recompute cadence increased during overnight window
 
 ### Known Limitations
-- Recompute is not yet triggered by thermostat setback events
-- Temperature unit assumptions are implicit (°F-centric thresholds)
+- Recompute not triggered by thermostat setback events
+- Temperature unit assumptions are °F-centric
 - Logging verbosity is fixed
 - No user-facing UI beyond helpers
 
 ### Upgrade Notes
-- Beta 9 is intended as a **baseline checkpoint**.
-- Future work should build on this version without modifying core control logic.
+- Beta 9 serves as the architectural baseline for RC1.
 - Existing helpers and model JSON may be reused without reset.
 
 ---
 
 ## Previous Betas
+
 Earlier beta iterations were experimental and are superseded by RC1.
 
