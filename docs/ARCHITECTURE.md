@@ -1,11 +1,9 @@
 # HVAC Comfort Start — Architecture
 
-**Version:** Release Candidate 1 (RC1)  
+**Version:** Release Candidate 1 (RC1-004)  
 **Status:** Feature complete; maintenance mode  
 **Platform:** Home Assistant + Pyscript  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
-
-This document describes the internal architecture of the HVAC Comfort Start system and the design principles behind its adaptive preheat control logic.
 
 ---
 
@@ -17,37 +15,18 @@ HVAC Comfort Start was designed to solve a specific and common problem:
 
 Key goals:
 
-- Eliminate fixed offsets and guesswork
-- Learn from real heating cycles
-- Remain stable across days (no oscillation)
-- Survive restarts and configuration changes
-- Prefer slight earliness over lateness
-- Remain thermostat-agnostic at the Home Assistant layer
-
----
-
-## Thermostat & HVAC Compatibility
-
-HVAC Comfort Start is **thermostat-agnostic**.
-
-It works with any Home Assistant–integrated thermostat that exposes a standard `climate` entity and supports:
-
-- `climate.set_temperature`
-- `climate.set_hvac_mode` (at minimum `heat`; optionally `heat_cool`)
-- a readable indoor temperature (either via the climate entity or a separate sensor)
-
-Because all control occurs at the Home Assistant abstraction layer, the underlying HVAC system may be:
-
-- gas / propane / oil furnaces (including modulating systems)
-- electric baseboard or radiant panels
-- hydronic radiant systems
-- heat pumps (heating path supported in RC1)
+- Eliminate fixed offsets and guesswork  
+- Learn from real heating cycles  
+- Remain stable across days (no oscillation)  
+- Survive restarts and configuration changes  
+- Prefer slight earliness over lateness  
+- Remain thermostat-agnostic at the Home Assistant layer  
 
 ---
 
 ## High-Level Architecture
 
-The system is divided into three independent but coordinated layers:
+Each layer has a single responsibility and minimal coupling to the others.
 
 ```
 +-------------------+
@@ -68,7 +47,19 @@ The system is divided into three independent but coordinated layers:
 +-------------------+
 ```
 
-Each layer has a single responsibility and minimal coupling to the others.
+This represents the conceptual control flow, which is expanded in the full system timeline below.
+
+---
+
+## System Flow Overview
+
+<p align="center">
+  <img src="assets/preheat-flow-detailed.png" alt="HVAC Comfort Start Detailed Flow" width="700">
+</p>
+
+<p align="center">
+  This flow illustrates the RC1-004 arrival-bounded learning model, where learning is strictly limited to the active heating phase.
+</p>
 
 ---
 
@@ -78,27 +69,17 @@ Each layer has a single responsibility and minimal coupling to the others.
 Determine *when* preheating must start in order to reach comfort temperature at comfort time.
 
 **Key Inputs:**
-- Current indoor temperature
-- Target temperature (from helper)
-- Learned heating rate (`k`)
-- Learned systematic bias (`offset_min`)
-- Optional forecast-based bias
-- Occupancy state
-- Min/max lead constraints
 
-**Core Equation (conceptual):**
-
-```
-lead_minutes = (k × temperature_delta × bias) + offset_min
-```
-
-**Characteristics:**
-- Runs every 15 minutes during the overnight window
-- Continuously corrects for overnight temperature drift
-- Does not modify learning state
-- Does not execute HVAC actions directly
+- Current indoor temperature  
+- Target temperature (from helper)  
+- Learned heating rate (`k`)  
+- Learned systematic bias (`offset_min`)  
+- Optional forecast-based bias  
+- Occupancy state  
+- Min/max lead constraints  
 
 **Output:**
+
 - Writes `input_datetime.preheat_start`
 
 ---
@@ -109,140 +90,90 @@ lead_minutes = (k × temperature_delta × bias) + offset_min
 Start and stop preheating at the correct times using Home Assistant automations.
 
 **Responsibilities:**
-- Start heating when current time ≥ `preheat_start`
-- Set `input_boolean.preheat_active` during active preheat
-- Restore normal HVAC mode after comfort time
-- Trigger learning evaluation at comfort time
 
-**Important Design Choice:**  
-Execution logic is intentionally *outside* the Pyscript controller to:
-- Allow UI-driven customization
-- Avoid timing races
-- Keep control logic deterministic
+- Start heating when current time ≥ `preheat_start`  
+- Set `input_boolean.preheat_active`  
+- Detect arrival (threshold crossing)  
+- Clear preheat state at arrival  
+- Trigger evaluation at comfort time  
 
----
+**RC1-004 Behavior:**
 
-## 3. Learning Layer — Arrival Evaluation
+Execution includes an **arrival-stop mechanism**:
 
-**Purpose:**  
-Learn how well the plan worked and adjust the model accordingly.
+- Detects first crossing of (target − tolerance)  
+- Marks arrival (latched, idempotent)  
+- Clears `preheat_active`  
 
-**Triggered:**  
-- Exactly at comfort time via automation
-
-**What It Measures:**
-- Actual indoor temperature vs target
-- Elapsed time since preheat start
-- Effective full-cycle heating rate (`k_cycle`) when gating conditions are met
-
-**What It Updates:**
-- `k` — minutes per degree (learned heating rate)
-- `offset_min` — systematic bias in minutes
+This defines a hard boundary between heating and post-arrival behavior.
 
 ---
 
-## Learning Model
+## 3. Learning Layer — Arrival-Bounded Evaluation
 
-### `k` — Effective Heating Rate
-- Units: minutes per degree (°F or °C)
-- Represents *full-cycle* performance
-- Learned conservatively:
-  - Faster increases
-  - Slower decreases
+### Primary Trigger
 
-This avoids optimistic assumptions based on short-term slope.
+Learning is strictly bounded to:
 
-### `offset_min` — Systematic Bias
-- Units: minutes
-- Compensates for factors not captured by `k`:
-  - Envelope losses
-  - Sensor lag
-  - Control hysteresis
-  - Environmental variability
+**preheat start → first arrival (target − tolerance)**
 
-**Asymmetric Update Strategy:**
-- Late arrival → corrected aggressively
-- Early arrival → corrected slowly
-- Offset never allowed to go negative
+Arrival is:
 
-This prevents oscillation and prioritizes comfort.
+- Latched once per cycle  
+- Idempotent  
+- Treated as the end of the heating phase  
+
+This prevents post-arrival modulation or holding behavior from contaminating the model.
 
 ---
 
-## Stability Guards
+### Fallback Trigger
 
-Several safeguards ensure reliable operation:
+If arrival is not detected:
 
-### Near-Comfort Guard
-Cycle-based learning (`k_cycle`) is only trusted within a tight window around comfort time.  
-This prevents manual calls or late executions from corrupting the model.
-
-### Active Preheat Guard
-Learning and optional slope sampling only occur while `input_boolean.preheat_active` is asserted, preventing daytime maintenance ramps from polluting the model.
-
-### Bias-Safe Clamping
-- `k` constrained to realistic bounds
-- `offset_min` constrained to non-negative values
+- Learning is finalized at comfort time  
 
 ---
 
-## Persistent State
+## What It Measures
 
-The learning model is stored in:
-
-```
-input_text.furnace_model_json
-```
-
-This allows:
-- Restart persistence
-- Manual inspection or seeding
-- No filesystem dependency for model state
-
-Runtime-only artifacts (if any) live under:
-
-```
-pyscript/data/
-```
-
-and are not version-controlled.
+- Indoor temperature vs target  
+- Elapsed time since preheat start  
+- Effective full-cycle heating performance  
 
 ---
 
-## Why This Architecture Works
+## What It Updates
 
-This architecture succeeds because:
+- `k` — minutes per degree (heating rate)  
+- `offset_min` — systematic timing bias  
 
-- Planning, execution, and learning are decoupled
-- Learning uses **full-cycle reality**, not theory
-- Corrections are asymmetric to prevent oscillation
-- Frequent replanning avoids stale assumptions
-- Guardrails prevent bad data from poisoning the model
+---
 
-The result is a controller that converges reliably under real-world conditions.
+## Why This Matters
+
+Modulating HVAC systems reduce output after reaching target temperature.
+
+If learning continues past this point, it introduces bias.
+
+RC1-004 eliminates that by learning only from the true heating phase.
 
 ---
 
 ## RC1 Status
 
-RC1 represents a **feature-complete release** derived from the proven Beta 9 control baseline:
+RC1-004 introduces arrival-bounded learning, completing the control model.
 
-- Persistent late arrival eliminated
-- Oscillation eliminated
-- Model converges within days, not weeks
-- Verified on a real modulating HVAC system
+System is:
 
-RC1 focuses on configuration hardening, helper standardization, and documentation. Core control behavior is intentionally unchanged from Beta 9.
+- Deterministic  
+- Stable  
+- Fully bounded  
 
----
-
-## Maintenance Mode
-
-RC1 is intended for long-term personal use. Future enhancements (if ever resumed) would focus on packaging, multi-zone support, or UI improvements rather than changes to core control logic.
+Future work (if any) focuses on usability and packaging, not algorithmic changes.
 
 ---
 
 ## Summary
 
-HVAC Comfort Start is not a schedule tweak or heuristic.  
-It is a small, adaptive control system built on real feedback, frozen in a stable and well-documented form in RC1.
+HVAC Comfort Start is a small adaptive control system built on real feedback and stable learning boundaries.
