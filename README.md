@@ -14,8 +14,6 @@
   <img src="https://img.shields.io/github/stars/dbullendsl/hvac-comfort-start?style=flat" alt="GitHub stars">
 </p>
 
-> AI Disclosure: Core system design, control strategy, and learning behavior were authored directly. AI was utilized as a development tool for code optimization and documentation structuring.# HVAC Comfort Start --- Adaptive Preheat
-
 **Status:** Release Candidate 1 (RC1-004) --- stable\
 **Platform:** Home Assistant (Pyscript-based)\
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
