@@ -14,6 +14,8 @@
   <img src="https://img.shields.io/github/stars/dbullendsl/hvac-comfort-start?style=flat" alt="GitHub stars">
 </p>
 
+---
+
 **Status:** RC1-004 (Release Candidate 1) — Stable  
 **Platform:** Home Assistant (Pyscript-based)  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
@@ -28,7 +30,7 @@ temperature is reached *at* the configured comfort time.
 ## Key Capabilities
 
 - Adaptive learning of heating performance based on real cycles
-- Accurate comfort-time arrival (not just "start early and hope")
+- Accurate comfort-time arrival (not just “start early and hope”)
 - Stable control that avoids day-to-day oscillation
 - Persistent model state across restarts
 - Designed to prefer slight earliness over lateness
@@ -40,35 +42,34 @@ temperature is reached *at* the configured comfort time.
 
 The system separates the problem into three layers:
 
----
-
 ### 1. Planning (Recompute)
 
 Periodically calculates required preheat start time based on:
 
-- Current indoor temperature
-- Target temperature
-- Learned heating rate (`k`)
-- Learned systematic offset (`offset_min`)
-- Optional forecast bias
+- Current indoor temperature  
+- Target temperature  
+- Learned heating rate (`k`)  
+- Learned systematic offset (`offset_min`)  
+- Optional forecast bias  
 
 ---
 
 ### 2. Execution
 
-- A Home Assistant automation starts preheating at the computed time.
-- `input_boolean.preheat_active` marks the active preheat window.
+- A Home Assistant automation starts preheating at the computed time  
+- `input_boolean.preheat_active` marks the active preheat window  
 
 ---
 
 ### 3. Learning (Arrival Evaluation)
 
-Arrival is detected when indoor temperature first reaches the configured
-threshold (target − tolerance).
+Arrival is detected when indoor temperature first reaches:
+
+**(target − tolerance)**
 
 Learning is strictly bounded to:
 
-**preheat start → first arrival (target − tolerance)**
+**preheat start → first arrival**
 
 Arrival defines the end of the heating phase and terminates learning for
 that cycle. This prevents post-arrival modulation or holding behavior
@@ -79,12 +80,13 @@ that repeated threshold crossings or automation retriggers do not affect
 learning stability.
 
 An arrival-stop automation detects the first threshold crossing,
-marks arrival, and clears the active preheat state. This enforces a
-hard boundary between the heating phase and post-arrival behavior.
+marks arrival, and clears the active preheat state.
 
 At comfort time, the system evaluates timing accuracy and updates the
 model. This acts as a finalization step and ensures learning completes
 even if arrival was not detected during the preheat cycle.
+
+---
 
 ## Preheat Flow (Simplified)
 
@@ -92,7 +94,9 @@ even if arrival was not detected during the preheat cycle.
   <img src="assets/preheat-flow.png" alt="HVAC Comfort Start Preheat Flow" width="500">
 </p>
 
-Learning is based only on the active heating phase, stopping as soon as the target temperature is reached.
+<p align="center">
+  Learning is based only on the active heating phase, stopping as soon as the target temperature is reached.
+</p>
 
 ---
 
@@ -109,9 +113,9 @@ by k alone (envelope loss, sensor lag, distribution delay, etc.).
 
 ### Asymmetric Learning
 
-- Late arrivals corrected quickly
-- Early arrivals corrected slowly
-- Slight earliness preferred over lateness for stability
+- Late arrivals corrected quickly  
+- Early arrivals corrected slowly  
+- Slight earliness preferred over lateness for stability  
 
 ---
 
@@ -135,7 +139,7 @@ Current version: **RC1-004**
 
 ## Notes
 
-Internal module and function names may still reference "furnace" for
+Internal module and function names may still reference “furnace” for
 backward compatibility, but the system is fully HVAC-agnostic.
 
 ---
