@@ -1,33 +1,31 @@
 # HVAC Comfort Start — Adaptive Preheat
 # Version: RC1-004 (builds on Beta 9 baseline)
-# Status: RC candidate patch for arrival-based learning stop
 #
-# Key RC1-004 changes:
-# - Adds ARRIVAL latch (first-hit) recorded by service furnace_preheat_mark_arrival()
-# - evaluate_arrival() prefers time-based arrival error (minutes vs comfort time)
-# - k_cycle (cycle-effective) uses start->arrival window when ARRIVAL is present
-# - Keeps Beta 9 asymmetric correction and guarded learning behavior
+# DEV DIAGNOSTICS (LOCAL-ONLY, NO GIT):
+# - Toggle: input_boolean.hvac_dev_diagnostics
+# - Writes CSV to:
+#     /config/log_tracking/dev_capture.csv   (capture_start boundary conditions)
+#     /config/log_tracking/dev_eval.csv      (evaluate_arrival diagnostics)
+#
+# IMPORTANT PYSCRIPT NOTES:
+# - Avoid generator expressions, comprehensions, ternary expressions, and some advanced AST forms.
+# - Keep helpers defined BEFORE any startup triggers/services use them.
 
 import sys
 import json
 import re
+import os
 from datetime import datetime, timedelta
 
 MODULE_PATH = "/config/pyscript_modules"
 if MODULE_PATH not in sys.path:
     sys.path.append(MODULE_PATH)
 
-import furnace_config_io
+import furnace_config_io  # noqa: E402
 
-# Captured at the moment preheat becomes active (used for cycle-based k)
-CYCLE = {"start_ts": None, "start_t": None}
-
-# RC1-004: ARRIVAL latch captured at first threshold hit (idempotent)
-ARRIVAL = {"ts": None, "t": None, "reason": None}
-
-#
-# Basic state helpers
-#
+# -----------------------------
+# Basic state helpers (MUST be defined early)
+# -----------------------------
 
 def _entity(eid, default=None):
     """Get state as string, with unknown/unavailable handling."""
@@ -60,13 +58,96 @@ def _entity_onoff(eid, default_off=True):
     """
     v = _entity(eid, None)
     if v is None:
+        # unknown/unavailable -> treat as OFF (default_off=True) or ON (default_off=False)
         return not default_off
     return str(v).lower() == "on"
 
+# -----------------------------
+# DEV diagnostics (CSV output) — Pyscript-safe
+# -----------------------------
 
-#
-# Config loading (from JSON file via executor)
-#
+DIAG_TOGGLE = "input_boolean.hvac_dev_diagnostics"
+DIAG_DIR = "/config/log_tracking"
+EVAL_CSV = os.path.join(DIAG_DIR, "dev_eval.csv")
+CAPTURE_CSV = os.path.join(DIAG_DIR, "dev_capture.csv")
+
+def _diag_enabled():
+    v = _entity(DIAG_TOGGLE, "off")
+    return str(v).lower() == "on"
+
+
+def _csv_cell(v):
+    """Minimal CSV escaping (no generators/comprehensions)."""
+    if v is None:
+        return ""
+    s = str(v)
+
+    needs_quote = False
+    for ch in [",", '"', "\n", "\r"]:
+        if ch in s:
+            needs_quote = True
+            break
+
+    if needs_quote:
+        s = s.replace('"', '""')
+        s = '"' + s + '"'
+    return s
+
+import diag_csv_writer
+
+async def _csv_append(path, header, line, newfile):
+    await task.executor(diag_csv_writer.append_csv, path, header, line, newfile)
+
+async def diag_capture_start(ts, outside, forecast_low, inside, target, setback):
+    if not _diag_enabled():
+        return
+
+    header = "ts,outside,forecast_low,inside,target,setback"
+
+    cells = [ts, outside, forecast_low, inside, target, setback]
+    parts = []
+    for c in cells:
+        parts.append(_csv_cell(c))
+    line = ",".join(parts)
+
+    newfile = not os.path.exists(CAPTURE_CSV)
+    await _csv_append(CAPTURE_CSV, header, line, newfile)
+
+
+async def diag_eval(ts, kind, arrival_ts, comfort, arrival_offset_min,
+                   offset_old, offset_new, k_model, k_cycle, k_used):
+    if not _diag_enabled():
+        return
+
+    header = "ts,kind,arrival_ts,comfort,arrival_offset_min,offset_old,offset_new,k_model,k_cycle,k_used"
+
+    cells = [
+        ts, kind, arrival_ts, comfort,
+        arrival_offset_min, offset_old, offset_new,
+        k_model, k_cycle, k_used
+    ]
+    parts = []
+    for c in cells:
+        parts.append(_csv_cell(c))
+    line = ",".join(parts)
+
+    newfile = not os.path.exists(EVAL_CSV)
+    await _csv_append(EVAL_CSV, header, line, newfile)
+
+# -----------------------------
+# Captured latches
+# -----------------------------
+
+# Captured at the moment preheat becomes active (used for cycle-based k)
+CYCLE = {"start_ts": None, "start_t": None}
+
+# RC1-004: ARRIVAL latch captured at first threshold hit (idempotent)
+ARRIVAL = {"ts": None, "t": None, "reason": None}
+
+
+# -----------------------------
+# Config loading
+# -----------------------------
 
 _TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
 
@@ -79,7 +160,8 @@ def _clean_entity_id(val, default):
         s = str(val).strip()
         if not s:
             return default
-        if s.lower() in ("none", "null", "unknown", "unavailable"):
+        low = s.lower()
+        if low in ("none", "null", "unknown", "unavailable"):
             return default
         return s
     except Exception:
@@ -90,12 +172,13 @@ def _resolve_active_hours(cfg):
     default = ["03:00:00", "23:00:00"]
     raw = cfg.get("active_hours", default)
 
-    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+    if (not isinstance(raw, (list, tuple))) or len(raw) != 2:
         log.warning("furnace_preheat: invalid active_hours (expected 2-item list); using default %s", default)
         return default
 
-    start, end = raw[0], raw[1]
-    if not (isinstance(start, str) and isinstance(end, str) and _TIME_RE.match(start) and _TIME_RE.match(end)):
+    start = raw[0]
+    end = raw[1]
+    if (not isinstance(start, str)) or (not isinstance(end, str)) or (_TIME_RE.match(start) is None) or (_TIME_RE.match(end) is None):
         log.warning("furnace_preheat: invalid active_hours values %s; using default %s", raw, default)
         return default
 
@@ -112,19 +195,17 @@ def _resolve_forecast_hours(cfg):
         return default
 
     # Clamp to sane bounds for RC1
-    val = max(1, min(val, 48))
+    if val < 1:
+        val = 1
+    if val > 48:
+        val = 48
     return val
 
 
 def _resolve_target_temp(cfg):
-    """Resolve target temperature with RC1 precedence:
-       1) Helper (authoritative)
-       2) Legacy JSON (numeric only)
-       3) Hard default
-    """
+    """RC1 precedence: helper -> legacy JSON numeric -> hard default."""
     helper = "input_number.hvac_comfort_start_target_temp"
 
-    # 1) Preferred: helper
     try:
         v = state.get(helper)
         if v not in (None, "unknown", "unavailable", ""):
@@ -132,28 +213,20 @@ def _resolve_target_temp(cfg):
     except Exception:
         pass
 
-    # 2) Legacy JSON fallback (numeric only)
     legacy = cfg.get("target_temp")
     if isinstance(legacy, (int, float)):
         return float(legacy), "legacy_config"
 
-    # 3) Absolute fallback
     return 74.0, "default"
 
 
 async def _load_cfg():
-    """Load config via native module in the executor and return a normalized dict.
-
-    RC1 notes:
-    - Target temperature is resolved primarily from the helper
-      input_number.hvac_comfort_start_target_temp (single source of truth).
-    - furnace_preheat_config.json target_temp is legacy and used only if numeric.
-    """
     defaults = {
         "climate": "climate.daikin",
         "indoor": "sensor.indoor_temperature",
         "outdoor": "sensor.main_room_outdoor_air_temperature",
-        "forecast_low": "sensor.nws_overnight_low_temperature",
+        # Your actual helper
+        "forecast_low": "input_number.nws_overnight_low",
         "occupied": "binary_sensor.family_home",
         "vacation": "input_boolean.vacation",
         "comfort": "input_datetime.comfort_time",
@@ -166,31 +239,23 @@ async def _load_cfg():
     try:
         cfg = await hass.async_add_executor_job(furnace_config_io.load_config)
     except Exception as e:
-        log.error(f"furnace_preheat: error loading config file: {e}")
+        log.error("furnace_preheat: error loading config file: %s", e)
         cfg = {}
 
     target, target_source = _resolve_target_temp(cfg)
-    log.debug(
-        "furnace_preheat: resolved target temperature = %.1fF (source=%s)",
-        target,
-        target_source,
-    )
+    log.debug("furnace_preheat: resolved target temperature = %.1fF (source=%s)", target, target_source)
 
     return {
         "climate": _clean_entity_id(cfg.get("climate"), defaults["climate"]),
         "indoor": _clean_entity_id(cfg.get("indoor_temp"), defaults["indoor"]),
         "outdoor": _clean_entity_id(cfg.get("outdoor_temp"), defaults["outdoor"]),
-
         "forecast_low": _clean_entity_id(cfg.get("forecast_low"), defaults["forecast_low"]),
         "occupied": _clean_entity_id(cfg.get("occupied_binary"), defaults["occupied"]),
         "vacation": _clean_entity_id(cfg.get("vacation"), defaults["vacation"]),
-
         "comfort": _clean_entity_id(cfg.get("comfort_time"), defaults["comfort"]),
         "preheat": _clean_entity_id(cfg.get("preheat_start"), defaults["preheat"]),
-
         "target": target,
         "active_hours": _resolve_active_hours(cfg),
-
         "forecast_hours": _resolve_forecast_hours(cfg),
         "min_lead": _clean_entity_id(cfg.get("min_lead"), defaults["min_lead"]),
         "max_lead": _clean_entity_id(cfg.get("max_lead"), defaults["max_lead"]),
@@ -198,9 +263,9 @@ async def _load_cfg():
     }
 
 
-#
+# -----------------------------
 # Model storage in input_text.furnace_model_json
-#
+# -----------------------------
 
 DEFAULT_MODEL = {"version": 2, "k": 12.0, "alpha": 0.15, "offset_min": 0.0}
 SAMPLE = {"last_t": None, "last_ts": None}
@@ -212,12 +277,12 @@ def _get_model():
         return DEFAULT_MODEL.copy()
     try:
         model = json.loads(raw)
-        return {
-            "version": 2,
-            "k": float(model.get("k", DEFAULT_MODEL["k"])),
-            "alpha": float(model.get("alpha", DEFAULT_MODEL["alpha"])),
-            "offset_min": float(model.get("offset_min", DEFAULT_MODEL["offset_min"])),
-        }
+        out = {}
+        out["version"] = 2
+        out["k"] = float(model.get("k", DEFAULT_MODEL["k"]))
+        out["alpha"] = float(model.get("alpha", DEFAULT_MODEL["alpha"]))
+        out["offset_min"] = float(model.get("offset_min", DEFAULT_MODEL["offset_min"]))
+        return out
     except Exception:
         return DEFAULT_MODEL.copy()
 
@@ -232,19 +297,14 @@ def _save_model(model):
                 "offset_min": float(model.get("offset_min", DEFAULT_MODEL["offset_min"])),
             }
         )
-        service.call(
-            "input_text",
-            "set_value",
-            entity_id="input_text.furnace_model_json",
-            value=payload,
-        )
+        service.call("input_text", "set_value", entity_id="input_text.furnace_model_json", value=payload)
     except Exception as e:
-        log.error(f"furnace_preheat: save failed: {e}")
+        log.error("furnace_preheat: save failed: %s", e)
 
 
 @time_trigger("startup")
 def init_model():
-    cur = _entity("input_text.furnace_model_json")
+    cur = _entity("input_text.furnace_model_json", None)
     if cur in (None, "unknown", "unavailable", ""):
         _save_model(DEFAULT_MODEL)
         return
@@ -254,13 +314,18 @@ def init_model():
         _save_model(DEFAULT_MODEL)
 
 
-#
-# Cycle capture: record the moment preheat becomes active
-# Also clear ARRIVAL latch for the new cycle.
-#
+# -----------------------------
+# Cycle capture (rising edge only)
+# -----------------------------
 
-@state_trigger("input_boolean.preheat_active == 'on'")
-async def furnace_preheat_capture_start():
+@state_trigger("input_boolean.preheat_active")
+async def furnace_preheat_capture_start(value=None, old_value=None):
+    # Rising edge: off -> on only
+    if value != "on":
+        return
+    if old_value == "on":
+        return
+
     cfg = await _load_cfg()
     CYCLE["start_ts"] = datetime.now()
     CYCLE["start_t"] = _entity_f(cfg["indoor"])
@@ -275,14 +340,33 @@ async def furnace_preheat_capture_start():
         % (CYCLE["start_ts"].strftime("%H:%M:%S"), CYCLE["start_t"])
     )
 
+    # DEV telemetry capture (boundary conditions)
+    try:
+        ts = CYCLE["start_ts"].isoformat()
 
-#
+        outside = _entity_f(cfg["outdoor"], 0.0)
+        f_low = _entity_f(cfg["forecast_low"], outside)
+
+        if CYCLE["start_t"] is not None:
+            inside = float(CYCLE["start_t"])
+        else:
+            inside = _entity_f(cfg["indoor"], 0.0)
+
+        target = float(cfg["target"])
+        setback = target - inside
+
+        await diag_capture_start(ts, outside, f_low, inside, target, setback)
+    except Exception as e:
+        log.error("furnace_preheat: diag_capture_start FAILED: %s", e)
+
+
+# -----------------------------
 # Services
-#
+# -----------------------------
 
 @service
 def furnace_preheat_dump_model():
-    log.info(f"furnace_preheat: model = {_get_model()}")
+    log.info("furnace_preheat: model = %s", _get_model())
 
 
 @service
@@ -293,17 +377,11 @@ def furnace_preheat_reset_model():
 @service
 async def furnace_preheat_dump_config():
     cfg = await _load_cfg()
-    log.info(f"furnace_preheat: effective cfg = {cfg}")
+    log.info("furnace_preheat: effective cfg = %s", cfg)
 
 
 @service
 async def furnace_preheat_mark_arrival(arrival_tolerance: float = 0.3, reason: str = "threshold"):
-    """
-    RC1-004: Latch ARRIVAL exactly once per preheat session.
-
-    Intended to be called by an automation that triggers on indoor temp reaching:
-        indoor >= target - arrival_tolerance
-    """
     # Idempotent
     if ARRIVAL["ts"] is not None:
         return
@@ -312,9 +390,13 @@ async def furnace_preheat_mark_arrival(arrival_tolerance: float = 0.3, reason: s
     indoor = _entity_f(cfg["indoor"])
     target = float(cfg["target"])
 
-    tol = float(arrival_tolerance) if arrival_tolerance is not None else 0.3
+    tol = 0.3
+    if arrival_tolerance is not None:
+        try:
+            tol = float(arrival_tolerance)
+        except Exception:
+            tol = 0.3
 
-    # Safety: only latch if threshold is actually met right now
     if indoor < (target - tol):
         log.debug(
             "furnace_preheat: mark_arrival ignored (below threshold). indoor=%.2f target=%.2f tol=%.2f"
@@ -334,17 +416,6 @@ async def furnace_preheat_mark_arrival(arrival_tolerance: float = 0.3, reason: s
 
 @service
 async def furnace_preheat_evaluate_arrival():
-    """
-    Called at comfort time by automation.
-
-    RC1-004 behavior:
-    - If ARRIVAL latch exists, compute arrival time error in minutes vs comfort time,
-      and update offset_min from that time error (late fast, early slow).
-    - Update k from cycle k_cycle using start->arrival window when ARRIVAL exists
-      (prevents post-arrival modulation from contaminating k).
-    - If ARRIVAL is missing (never hit target), fall back to Beta 9 behavior
-      using temperature error at comfort time mapped to minutes via k_used.
-    """
     cfg = await _load_cfg()
     model = _get_model()
 
@@ -354,66 +425,112 @@ async def furnace_preheat_evaluate_arrival():
     k_model = float(model.get("k", DEFAULT_MODEL["k"]))
     offset = float(model.get("offset_min", 0.0))
 
-    # Comfort datetime (today or tomorrow) aligned with "now"
-    comfort_s = _entity(cfg["comfort"]) or "06:00:00"
-    hh, mm, ss = [int(x) for x in comfort_s.split(":")]
+    comfort_s = _entity(cfg["comfort"], None)
+    if comfort_s is None:
+        comfort_s = "06:00:00"
+    parts = comfort_s.split(":")
+    hh = int(parts[0])
+    mm = int(parts[1])
+    ss = int(parts[2])
     now = datetime.now()
     comfort_dt = now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
 
-    # If comfort time earlier than now by more than a few minutes, interpret as "today's comfort already passed"
-    # (evaluate_arrival is typically called right at comfort time; this is just defensive.)
     if comfort_dt < (now - timedelta(minutes=10)):
         comfort_dt = comfort_dt + timedelta(days=1)
 
-    # Choose evaluation endpoint:
-    # - If ARRIVAL latched, use arrival timestamp and arrival temp
-    # - Otherwise, use now (comfort time) and current indoor temp
-    end_ts = ARRIVAL["ts"] if ARRIVAL["ts"] is not None else now
-    end_t = float(ARRIVAL["t"]) if ARRIVAL["t"] is not None else indoor_now
+    # Endpoint: ARRIVAL if latched else comfort-time (now)
+    if ARRIVAL["ts"] is not None:
+        end_ts = ARRIVAL["ts"]
+    else:
+        end_ts = now
 
-    # Compute cycle-effective k using start->end window (end is arrival when available)
+    if ARRIVAL["t"] is not None:
+        end_t = float(ARRIVAL["t"])
+    else:
+        end_t = indoor_now
+
+    # Compute cycle-effective k using start->end window
     k_cycle = None
-    if CYCLE["start_ts"] is not None and CYCLE["start_t"] is not None:
-        minutes = max(1.0, (end_ts - CYCLE["start_ts"]).total_seconds() / 60.0)
+    if (CYCLE["start_ts"] is not None) and (CYCLE["start_t"] is not None):
+        minutes = (end_ts - CYCLE["start_ts"]).total_seconds() / 60.0
+        if minutes < 1.0:
+            minutes = 1.0
+
         start_t = float(CYCLE["start_t"])
         gained = end_t - start_t
 
-        # High-demand gate (avoid modulated/partial-load contaminating k)
-        delta_start = max(0.0, target - start_t)
-        if delta_start >= 2.0 and minutes >= 15.0 and gained >= 0.5:
+        delta_start = target - start_t
+        if delta_start < 0.0:
+            delta_start = 0.0
+
+        if (delta_start >= 2.0) and (minutes >= 15.0) and (gained >= 0.5):
             k_cycle = minutes / gained
 
-    # Conservative k for error-to-minutes mapping (fallback path)
+    # Conservative k used for mapping in fallback
     k_used = k_model
     if k_cycle is not None:
-        k_used = max(k_model, k_cycle)
+        if k_cycle > k_used:
+            k_used = k_cycle
 
-    # --- RC1-004 primary path: time-based arrival error if ARRIVAL exists ---
+    # --- Primary path: time-based arrival error if ARRIVAL exists ---
     if ARRIVAL["ts"] is not None:
-        # arrival_offset_min: negative = early, positive = late
         arrival_offset_min = (ARRIVAL["ts"] - comfort_dt).total_seconds() / 60.0
-        arrival_offset_min = max(-180.0, min(180.0, arrival_offset_min))
+        if arrival_offset_min < -180.0:
+            arrival_offset_min = -180.0
+        if arrival_offset_min > 180.0:
+            arrival_offset_min = 180.0
 
-        # Asymmetric offset correction: late fast, early slow; clamp >= 0 to prefer slight earliness (Beta 9 behavior)
         alpha_late = 0.60
         alpha_early = 0.10
-        alpha_off = alpha_late if arrival_offset_min > 0 else alpha_early
+        if arrival_offset_min > 0:
+            alpha_off = alpha_late
+        else:
+            alpha_off = alpha_early
 
         new_offset = (1 - alpha_off) * offset + alpha_off * arrival_offset_min
-        new_offset = max(0.0, min(180.0, new_offset))
+        if new_offset < 0.0:
+            new_offset = 0.0
+        if new_offset > 180.0:
+            new_offset = 180.0
 
-        # Update k from cycle measurement (asymmetric: increase faster, decrease slower)
         if k_cycle is not None:
             alpha_up = 0.40
             alpha_down = 0.08
-            alpha_k = alpha_up if k_cycle > k_model else alpha_down
+            if k_cycle > k_model:
+                alpha_k = alpha_up
+            else:
+                alpha_k = alpha_down
 
             k_new = (1 - alpha_k) * k_model + alpha_k * k_cycle
-            k_new = max(2.0, min(60.0, k_new))
+            if k_new < 2.0:
+                k_new = 2.0
+            if k_new > 60.0:
+                k_new = 60.0
             model["k"] = k_new
 
         model["offset_min"] = new_offset
         _save_model(model)
+
+        # DEV telemetry
+        try:
+            if k_cycle is not None:
+                k_cycle_out = round(k_cycle, 3)
+            else:
+                k_cycle_out = ""
+            await diag_eval(
+                ts=datetime.now().isoformat(),
+                kind="time-based",
+                arrival_ts=ARRIVAL["ts"].strftime("%H:%M:%S"),
+                comfort=comfort_dt.strftime("%H:%M:%S"),
+                arrival_offset_min=round(arrival_offset_min, 3),
+                offset_old=round(offset, 3),
+                offset_new=round(new_offset, 3),
+                k_model=round(k_model, 3),
+                k_cycle=k_cycle_out,
+                k_used=round(k_used, 3),
+            )
+        except Exception as e:
+            log.error("furnace_preheat: await diag_eval FAILED: %s", e)
 
         log.info(
             "furnace_preheat: arrival eval (time-based) arrival_ts=%s comfort=%s "
@@ -426,45 +543,79 @@ async def furnace_preheat_evaluate_arrival():
                 offset,
                 new_offset,
                 k_model,
-                f"{k_cycle:.2f}" if k_cycle else "n/a",
+                ("%0.2f" % k_cycle) if k_cycle is not None else "n/a",
                 k_used,
             )
         )
         return
 
-    # --- Fallback path: temperature error at comfort time (Beta 9) ---
-    error_T = target - indoor_now  # + => late, - => early (temperature-based)
+    # --- Fallback path: temperature error at comfort time (Beta 9 style) ---
+    error_T = target - indoor_now
 
-    # If we're within 0.3°, treat as on-time
     if abs(error_T) < 0.3:
         log.info(
             "furnace_preheat: arrival ok (temp-based) indoor=%.1fF target=%.1fF k_model=%.2f k_cycle=%s offset=%.1f"
-            % (indoor_now, target, k_model, f"{k_cycle:.2f}" if k_cycle else "n/a", offset)
+            % (indoor_now, target, k_model, ("%0.2f" % k_cycle) if k_cycle is not None else "n/a", offset)
         )
         return
 
-    # Convert temperature error to minutes (bounded)
     error_min = error_T * k_used
-    error_min = max(-120.0, min(120.0, error_min))
+    if error_min < -120.0:
+        error_min = -120.0
+    if error_min > 120.0:
+        error_min = 120.0
 
     alpha_late = 0.60
     alpha_early = 0.10
-    alpha_off = alpha_late if error_T > 0 else alpha_early
+    if error_T > 0:
+        alpha_off = alpha_late
+    else:
+        alpha_off = alpha_early
 
     new_offset = (1 - alpha_off) * offset + alpha_off * error_min
-    new_offset = max(0.0, min(180.0, new_offset))
+    if new_offset < 0.0:
+        new_offset = 0.0
+    if new_offset > 180.0:
+        new_offset = 180.0
 
     if k_cycle is not None:
         alpha_up = 0.40
         alpha_down = 0.08
-        alpha_k = alpha_up if k_cycle > k_model else alpha_down
+        if k_cycle > k_model:
+            alpha_k = alpha_up
+        else:
+            alpha_k = alpha_down
 
         k_new = (1 - alpha_k) * k_model + alpha_k * k_cycle
-        k_new = max(2.0, min(60.0, k_new))
+        if k_new < 2.0:
+            k_new = 2.0
+        if k_new > 60.0:
+            k_new = 60.0
         model["k"] = k_new
 
     model["offset_min"] = new_offset
     _save_model(model)
+
+    # DEV telemetry for fallback
+    try:
+        if k_cycle is not None:
+            k_cycle_out = round(k_cycle, 3)
+        else:
+            k_cycle_out = ""
+        await diag_eval(
+            ts=datetime.now().isoformat(),
+            kind="temp-based",
+            arrival_ts=now.strftime("%H:%M:%S"),
+            comfort=comfort_dt.strftime("%H:%M:%S"),
+            arrival_offset_min=round(error_min, 3),
+            offset_old=round(offset, 3),
+            offset_new=round(new_offset, 3),
+            k_model=round(k_model, 3),
+            k_cycle=k_cycle_out,
+            k_used=round(k_used, 3),
+        )
+    except Exception as e:
+        log.error("furnace_preheat: await diag_eval(temp) FAILED: %s", e)
 
     log.info(
         "furnace_preheat: arrival eval (temp-based) indoor=%.1fF target=%.1fF error_T=%.2fF "
@@ -474,7 +625,7 @@ async def furnace_preheat_evaluate_arrival():
             target,
             error_T,
             k_model,
-            f"{k_cycle:.2f}" if k_cycle else "n/a",
+            ("%0.2f" % k_cycle) if k_cycle is not None else "n/a",
             k_used,
             error_min,
             offset,
@@ -483,16 +634,14 @@ async def furnace_preheat_evaluate_arrival():
     )
 
 
-#
+# -----------------------------
 # Learning loop (slope-based) — optional safety net
-# One-sided: may only INCREASE k (never make system "faster")
-#
+# -----------------------------
 
 @time_trigger("cron(* * * * *)")  # every minute
 async def learn_from_slope():
     cfg = await _load_cfg()
 
-    # Learn only while actually preheating (avoid daytime maintenance ramps)
     if not _entity_onoff("input_boolean.preheat_active", default_off=True):
         SAMPLE["last_t"] = None
         SAMPLE["last_ts"] = None
@@ -504,9 +653,8 @@ async def learn_from_slope():
         SAMPLE["last_ts"] = None
         return
 
-    # Use climate state for mode
-    hvac_mode = (_entity(cfg["climate"], "") or "").lower()
-    if hvac_mode not in ("heat", "heat_cool"):
+    hvac_mode = str(_entity(cfg["climate"], "") or "").lower()
+    if (hvac_mode != "heat") and (hvac_mode != "heat_cool"):
         SAMPLE["last_t"] = None
         SAMPLE["last_ts"] = None
         return
@@ -514,7 +662,6 @@ async def learn_from_slope():
     indoor = _entity_f(cfg["indoor"])
     target = float(cfg["target"])
 
-    # Ignore the slow tail around target
     if indoor >= (target - 1.0):
         SAMPLE["last_t"] = None
         SAMPLE["last_ts"] = None
@@ -526,40 +673,47 @@ async def learn_from_slope():
         SAMPLE["last_ts"] = now
         return
 
-    dt_min = max(0.1, (now - SAMPLE["last_ts"]).total_seconds() / 60.0)
+    dt_min = (now - SAMPLE["last_ts"]).total_seconds() / 60.0
+    if dt_min < 0.1:
+        dt_min = 0.1
+
     dT = indoor - SAMPLE["last_t"]
     SAMPLE["last_t"] = indoor
     SAMPLE["last_ts"] = now
 
     slope = dT / dt_min  # °F per min
-
-    # Keep only plausible, positive ramps
-    if slope <= 0.02 or slope >= 2.0:
+    if (slope <= 0.02) or (slope >= 2.0):
         return
 
     k_obs = 1.0 / slope  # minutes per degree
     model = _get_model()
     k_cur = float(model.get("k", DEFAULT_MODEL["k"]))
 
-    # EWMA (biased to accept increases faster than decreases)
     alpha_up = 0.30
     alpha_down = 0.05
-    alpha = alpha_up if k_obs > k_cur else alpha_down
+    if k_obs > k_cur:
+        alpha_k = alpha_up
+    else:
+        alpha_k = alpha_down
 
-    k_new = (1 - alpha) * k_cur + alpha * k_obs
-    k_new = max(2.0, min(60.0, k_new))
+    k_new = (1 - alpha_k) * k_cur + alpha_k * k_obs
+    if k_new < 2.0:
+        k_new = 2.0
+    if k_new > 60.0:
+        k_new = 60.0
 
     # One-sided clamp: never allow slope learning to make k smaller/faster
-    k_new = max(k_cur, k_new)
+    if k_new < k_cur:
+        k_new = k_cur
 
-    if k_new > k_cur * 1.01:
+    if k_new > (k_cur * 1.01):
         model["k"] = k_new
         _save_model(model)
 
 
-#
+# -----------------------------
 # Recompute preheat schedule
-#
+# -----------------------------
 
 @service
 @time_trigger("cron(0 21 * * *)")      # 21:00 daily
@@ -572,26 +726,35 @@ async def furnace_preheat_recompute():
         log.info("furnace_preheat: vacation mode active; skipping schedule")
         return
 
-    comfort = _entity(cfg["comfort"]) or "06:00:00"
+    comfort = _entity(cfg["comfort"], None)
+    if comfort is None:
+        comfort = "06:00:00"
 
-    def _mk_on(base: datetime, hhmmss: str):
-        hh, mm, ss = [int(x) for x in hhmmss.split(":")]
-        return base.replace(hour=hh, minute=mm, second=ss, microsecond=0)
-
+    def _mk_on(base_dt, hhmmss):
+        parts = hhmmss.split(":")
+        hh = int(parts[0])
+        mm = int(parts[1])
+        ss = int(parts[2])
+        return base_dt.replace(hour=hh, minute=mm, second=ss, microsecond=0)
     now = datetime.now()
     comfort_today = _mk_on(now, comfort)
-    comfort_dt = comfort_today if comfort_today > now else _mk_on(now + timedelta(days=1), comfort)
+    if comfort_today > now:
+        comfort_dt = comfort_today
+    else:
+        comfort_dt = _mk_on(now + timedelta(days=1), comfort)
 
-    # --- Freeze guard: avoid moving preheat_start once we are close to it ---
-    existing_start_s = _entity(cfg["preheat"])
+    # Freeze guard
+    existing_start_s = _entity(cfg["preheat"], None)
     if existing_start_s:
         try:
-            hh, mm, ss = [int(x) for x in existing_start_s.split(":")]
+            parts = existing_start_s.split(":")
+            hh = int(parts[0])
+            mm = int(parts[1])
+            ss = int(parts[2])
             existing_start_dt = comfort_dt.replace(hour=hh, minute=mm, second=ss, microsecond=0)
 
-            # If the stored start appears after comfort, interpret it as "today"
             if existing_start_dt > comfort_dt:
-                existing_start_dt -= timedelta(days=1)
+                existing_start_dt = existing_start_dt - timedelta(days=1)
 
             freeze_window_min = 15
             if datetime.now() >= (existing_start_dt - timedelta(minutes=freeze_window_min)):
@@ -601,7 +764,7 @@ async def furnace_preheat_recompute():
                 )
                 return
         except Exception as e:
-            log.debug(f"furnace_preheat: freeze guard skipped: {e}")
+            log.debug("furnace_preheat: freeze guard skipped: %s", e)
 
     model = _get_model()
     k = float(model.get("k", DEFAULT_MODEL["k"]))
@@ -611,50 +774,80 @@ async def furnace_preheat_recompute():
     target = float(cfg["target"])
     outdoor = _entity_f(cfg["outdoor"])
 
-    delta = max(0.0, target - current)
+    delta = target - current
+    if delta < 0.0:
+        delta = 0.0
+
     bias = 1.0
 
-    if cfg["forecast_low"]:
-        f_low = _entity_f(cfg["forecast_low"], outdoor)
-        drop = max(0.0, outdoor - f_low)
-        if drop >= 5:
-            bias += 0.10
-        if drop >= 10:
-            bias += 0.20
+    # Forecast bias uses your helper entity
+    f_low = _entity_f(cfg["forecast_low"], outdoor)
+    drop = outdoor - f_low
+    if drop < 0.0:
+        drop = 0.0
+    if drop >= 5.0:
+        bias = bias + 0.10
+    if drop >= 10.0:
+        bias = bias + 0.20
 
     lead_min = (k * delta * bias) + offset_min
 
     occupied = _entity_onoff(cfg["occupied"], default_off=False)
     if not occupied:
-        cap = float(_entity(cfg["unocc_cap"]) or 0)
-        if cap > 0:
-            lead_min = min(lead_min, cap)
+        cap_raw = _entity(cfg["unocc_cap"], None)
+        cap = 0.0
+        if cap_raw is not None:
+            try:
+                cap = float(cap_raw)
+            except Exception:
+                cap = 0.0
+        if cap > 0.0 and lead_min > cap:
+            lead_min = cap
 
-    min_lead = float(_entity(cfg["min_lead"]) or 0)
-    max_lead = float(_entity(cfg["max_lead"]) or 240)
-    lead_min = max(min_lead, min(max_lead, lead_min))
+    min_lead_raw = _entity(cfg["min_lead"], None)
+    max_lead_raw = _entity(cfg["max_lead"], None)
+
+    min_lead = 0.0
+    max_lead = 240.0
+    try:
+        if min_lead_raw is not None:
+            min_lead = float(min_lead_raw)
+    except Exception:
+        min_lead = 0.0
+    try:
+        if max_lead_raw is not None:
+            max_lead = float(max_lead_raw)
+    except Exception:
+        max_lead = 240.0
+
+    if lead_min < min_lead:
+        lead_min = min_lead
+    if lead_min > max_lead:
+        lead_min = max_lead
 
     start_dt = comfort_dt - timedelta(minutes=lead_min)
 
     # Optional clamp to active_hours window
     try:
-        start_s, end_s = cfg["active_hours"]
+        start_s = cfg["active_hours"][0]
+        end_s = cfg["active_hours"][1]
+
         win_start = _mk_on(start_dt, start_s)
         win_end = _mk_on(start_dt, end_s)
 
         if win_end <= win_start:
             # Window crosses midnight
             if start_dt < win_start:
-                win_start -= timedelta(days=1)
+                win_start = win_start - timedelta(days=1)
             else:
-                win_end += timedelta(days=1)
+                win_end = win_end + timedelta(days=1)
 
         if start_dt < win_start:
             start_dt = win_start
         if start_dt > win_end:
             start_dt = win_end
     except Exception as e:
-        log.debug(f"furnace_preheat: window clamp skipped: {e}")
+        log.debug("furnace_preheat: window clamp skipped: %s", e)
 
     service.call(
         "input_datetime",
@@ -678,9 +871,9 @@ async def furnace_preheat_recompute():
     )
 
 
-#
+# -----------------------------
 # Debug logging of hvac_action
-#
+# -----------------------------
 
 @state_trigger("var_name.startswith('climate.')")
 async def furnace_preheat_log_action_changes(value=None, var_name=None, old_value=None):
@@ -692,4 +885,4 @@ async def furnace_preheat_log_action_changes(value=None, var_name=None, old_valu
 
     attrs = state.getattr(climate_eid) or {}
     act = attrs.get("hvac_action")
-    log.debug(f"furnace_preheat: hvac_action={act}")
+    log.debug("furnace_preheat: hvac_action=%s", act)

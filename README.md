@@ -14,8 +14,8 @@
   <img src="https://img.shields.io/github/stars/dbullendsl/hvac-comfort-start?style=flat" alt="GitHub stars">
 </p>
 
-**Status:** Release Candidate 1 (RC1-004) --- stable\
-**Platform:** Home Assistant (Pyscript-based)\
+**Status:** RC1-004 (Release Candidate 1) — Stable  
+**Platform:** Home Assistant (Pyscript-based)  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
 
 HVAC Comfort Start is an adaptive preheat controller for Home Assistant
@@ -23,59 +23,70 @@ that learns how long your HVAC system actually needs to reach a desired
 comfort temperature and automatically schedules preheating so the target
 temperature is reached *at* the configured comfort time.
 
-------------------------------------------------------------------------
+---
 
 ## Key Capabilities
 
--   Adaptive learning of heating performance based on real cycles
--   Accurate comfort-time arrival (not just "start early and hope")
--   Stable control that avoids day-to-day oscillation
--   Persistent model state across restarts
--   Designed to prefer slight earliness over lateness
--   Validated on a real modulating furnace
+- Adaptive learning of heating performance based on real cycles
+- Accurate comfort-time arrival (not just "start early and hope")
+- Stable control that avoids day-to-day oscillation
+- Persistent model state across restarts
+- Designed to prefer slight earliness over lateness
+- Validated on real-world modulating HVAC systems
 
-------------------------------------------------------------------------
+---
 
 ## How It Works
 
 The system separates the problem into three layers:
 
+---
+
 ### 1. Planning (Recompute)
 
 Periodically calculates required preheat start time based on:
 
--   Current indoor temperature
--   Target temperature
--   Learned heating rate (`k`)
--   Learned systematic offset (`offset_min`)
--   Optional forecast bias
+- Current indoor temperature
+- Target temperature
+- Learned heating rate (`k`)
+- Learned systematic offset (`offset_min`)
+- Optional forecast bias
 
-------------------------------------------------------------------------
+---
 
 ### 2. Execution
 
--   A Home Assistant automation starts preheating at the computed time.
--   `input_boolean.preheat_active` marks the active preheat window.
+- A Home Assistant automation starts preheating at the computed time.
+- `input_boolean.preheat_active` marks the active preheat window.
 
-------------------------------------------------------------------------
+---
 
 ### 3. Learning (Arrival Evaluation)
 
 Arrival is detected when indoor temperature first reaches the configured
 threshold (target − tolerance).
 
-Learning is bounded to:
+Learning is strictly bounded to:
 
-preheat start → first arrival
+**preheat start → first arrival (target − tolerance)**
 
-This prevents post-arrival modulation from contaminating learning.
+Arrival defines the end of the heating phase and terminates learning for
+that cycle. This prevents post-arrival modulation or holding behavior
+from influencing the model.
 
-At comfort time, the system evaluates timing accuracy and updates:
+Arrival is latched once per cycle and treated as idempotent, ensuring
+that repeated threshold crossings or automation retriggers do not affect
+learning stability.
 
--   Effective heating rate (`k`)
--   Systematic timing bias (`offset_min`)
+An arrival-stop automation detects the first threshold crossing,
+marks arrival, and clears the active preheat state. This enforces a
+hard boundary between the heating phase and post-arrival behavior.
 
-------------------------------------------------------------------------
+At comfort time, the system evaluates timing accuracy and updates the
+model. This acts as a finalization step and ensures learning completes
+even if arrival was not detected during the preheat cycle.
+
+---
 
 ## Model Concepts
 
@@ -90,17 +101,36 @@ by k alone (envelope loss, sensor lag, distribution delay, etc.).
 
 ### Asymmetric Learning
 
--   Late arrivals corrected quickly.
--   Early arrivals corrected slowly.
--   Slight earliness preferred over lateness for stability.
+- Late arrivals corrected quickly
+- Early arrivals corrected slowly
+- Slight earliness preferred over lateness for stability
 
-------------------------------------------------------------------------
+---
+
+## Why Arrival-Based Learning Matters
+
+In many systems, learning continues after the target temperature is
+reached. On modulating HVAC systems, this introduces bias because the
+system reduces output and enters a holding phase.
+
+HVAC Comfort Start stops learning at the moment of arrival, ensuring the
+model reflects only the true heating phase. This produces more stable
+and accurate preheat timing over time.
+
+---
 
 ## Version
 
 Current version: **RC1-004**
 
-------------------------------------------------------------------------
+---
+
+## Notes
+
+Internal module and function names may still reference "furnace" for
+backward compatibility, but the system is fully HVAC-agnostic.
+
+---
 
 ### AI Disclosure
 
