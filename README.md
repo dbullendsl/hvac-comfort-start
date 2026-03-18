@@ -25,9 +25,6 @@ that learns how long your HVAC system actually needs to reach a desired
 comfort temperature and automatically schedules preheating so the target
 temperature is reached *at* the configured comfort time.
 
-This project is optimized for real-world systems where static schedules
-and fixed offsets consistently arrive too early or too late.
-
 ------------------------------------------------------------------------
 
 ## Key Capabilities
@@ -104,6 +101,8 @@ by k alone (envelope loss, sensor lag, distribution delay, etc.).
 ## Version
 
 Current version: **RC1-004**
+
+------------------------------------------------------------------------
 
 ### AI Disclosure
 
