@@ -1,4 +1,20 @@
-# HVAC Comfort Start --- Adaptive Preheat
+<p align="center">
+  <img src="assets/banner-light.png#gh-light-mode-only" alt="HVAC Comfort Start banner for light mode">
+  <img src="assets/banner-dark.png#gh-dark-mode-only" alt="HVAC Comfort Start banner for dark mode">
+</p>
+
+<p align="center">
+  <strong>Predictive Preheat Control for Home Assistant</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/status-RC1-blue" alt="Status RC1">
+  <img src="https://img.shields.io/badge/Home%20Assistant-Custom-41BDF5" alt="Home Assistant Custom">
+  <img src="https://img.shields.io/github/v/tag/dbullendsl/hvac-comfort-start?label=release" alt="Release">
+  <img src="https://img.shields.io/github/stars/dbullendsl/hvac-comfort-start?style=flat" alt="GitHub stars">
+</p>
+
+> AI Disclosure: Core system design, control strategy, and learning behavior were authored directly. AI was utilized as a development tool for code optimization and documentation structuring.# HVAC Comfort Start --- Adaptive Preheat
 
 **Status:** Release Candidate 1 (RC1-004) --- stable\
 **Platform:** Home Assistant (Pyscript-based)\
@@ -89,3 +105,6 @@ by k alone (envelope loss, sensor lag, distribution delay, etc.).
 
 Current version: **RC1-004**
 
+### AI Disclosure
+
+Core system design, control strategy, and learning behavior were authored directly. AI was utilized as a development tool for code optimization and documentation structuring.
