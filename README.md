@@ -93,6 +93,7 @@ even if arrival was not detected during the preheat cycle.
 </p>
 
 Learning is based only on the active heating phase, stopping as soon as the target temperature is reached.
+
 ---
 
 ## Model Concepts
