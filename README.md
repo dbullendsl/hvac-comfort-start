@@ -86,12 +86,13 @@ At comfort time, the system evaluates timing accuracy and updates the
 model. This acts as a finalization step and ensures learning completes
 even if arrival was not detected during the preheat cycle.
 
-## How It Works
+## Preheat Flow (Simplified)
 
 <p align="center">
   <img src="assets/preheat-flow.png" alt="HVAC Comfort Start Preheat Flow" width="500">
 </p>
 
+Learning is based only on the active heating phase, stopping as soon as the target temperature is reached.
 ---
 
 ## Model Concepts
