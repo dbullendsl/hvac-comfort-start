@@ -54,7 +54,7 @@ This represents the conceptual control flow, which is expanded in the full syste
 ## System Flow Overview
 
 <p align="center">
-  <img src="assets/preheat-flow-detailed.png" alt="HVAC Comfort Start Detailed Flow" width="700">
+  <img src="../assets/preheat-flow-detailed.png" alt="HVAC Comfort Start Detailed Flow" width="700">
 </p>
 
 <p align="center">
