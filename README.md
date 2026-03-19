@@ -27,6 +27,25 @@ temperature is reached *at* the configured comfort time.
 
 ---
 
+## When This Is Most Useful
+
+HVAC Comfort Start is especially effective in homes that use **temperature setback schedules**, such as lowering the thermostat overnight to save energy.
+
+Without adaptive preheating, setback strategies often create a tradeoff:
+
+- Start heating too early → reduced energy savings  
+- Start heating too late → uncomfortable mornings  
+
+This system removes that tradeoff by learning how long your home actually takes to warm up and automatically starting preheat at the right time.
+
+The result is:
+
+- Maximum energy savings from overnight setback  
+- Comfortable temperature exactly at wake-up time  
+- No need to guess or manually adjust schedules  
+
+---
+
 ## Key Capabilities
 
 - Adaptive learning of heating performance based on real cycles
@@ -35,6 +54,30 @@ temperature is reached *at* the configured comfort time.
 - Persistent model state across restarts
 - Designed to prefer slight earliness over lateness
 - Validated on real-world modulating HVAC systems
+
+---
+
+## Why Not Just Use a Smart Thermostat Feature?
+
+Many smart thermostats include features like “smart recovery” or “early start,” but these are typically:
+
+- Proprietary and opaque  
+- Limited to the thermostat’s internal sensors and logic  
+- Not persistent or tunable at the system level  
+
+HVAC Comfort Start operates at the Home Assistant level and is:
+
+- Thermostat-agnostic (works with any `climate` entity)  
+- Based on a transparent and persistent learning model  
+- Driven by real-world performance across full heating cycles  
+
+Because it separates planning, execution, and learning, it can:
+
+- Adapt more consistently across changing conditions  
+- Avoid hidden vendor heuristics  
+- Integrate with broader Home Assistant automations and data  
+
+In short, it turns preheating into a system-level control problem rather than a thermostat-specific feature.
 
 ---
 
@@ -85,6 +128,24 @@ marks arrival, and clears the active preheat state.
 At comfort time, the system evaluates timing accuracy and updates the
 model. This acts as a finalization step and ensures learning completes
 even if arrival was not detected during the preheat cycle.
+
+---
+
+## Timing Accuracy
+
+Arrival time is adaptive and continuously improving, but not perfectly exact.
+
+Real-world heating performance varies from day to day due to changing outdoor conditions, internal heat loads, and system behavior. As a result, arrival may be slightly early or late on any given day.
+
+HVAC Comfort Start is designed to:
+
+- Minimize timing error over time  
+- Prefer slight earliness over lateness  
+- Avoid large swings or oscillation  
+
+The goal is not perfect precision, but **consistently accurate and stable arrival near the target comfort time**.
+
+The system continuously refines its model based on actual performance, reducing systematic bias while maintaining stability.
 
 ---
 
