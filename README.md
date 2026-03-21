@@ -89,10 +89,11 @@ The system separates the problem into three layers:
 
 Periodically calculates required preheat start time based on:
 
-- Current indoor temperature  
+- Current indoor temperature
+- Current outdoor temperature
 - Target temperature  
 - Learned heating rate (`k`)  
-- Learned systematic offset (`offset_min`)  
+- Learned systematic offset (`offset_min`)
 - Optional forecast bias  
 
 ---
