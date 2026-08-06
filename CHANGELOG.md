@@ -6,6 +6,16 @@
 Feature complete. Stable. Learning window finalized.
 
 ---
+### RC1-004 - Respect manual HVAC OFF state in start and resume automations
+
+Fix: Manual thermostat OFF is now respected
+
+If the thermostat is manually set to OFF:
+- Preheat will not start
+- Comfort-time resume will not re-enable heating
+- Learning and state cleanup still occur
+
+This prevents unintended HVAC activation when the system is intentionally disabled.
 
 ### RC1-004 — Arrival-Bounded Learning Window (First-Hit Freeze)
 
