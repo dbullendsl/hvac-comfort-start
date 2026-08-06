@@ -47,6 +47,15 @@ condition:
     entity_id: !input vacation
     state: "off"
 
+  - condition: or 
+    conditions:
+      - condition: state
+        entity_id: !input climate
+        state: "auto"
+      - condition: state
+        entity_id: !input climate
+        state: "heat"
+        
   - condition: or
     conditions:
       - condition: state

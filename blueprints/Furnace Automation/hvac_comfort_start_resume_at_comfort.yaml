@@ -111,6 +111,8 @@ variables:
   # Values
   indoor_temp: "{{ states(indoor_temp_entity) | float(none) }}"
   target_temp: "{{ states(target_temp_entity) | float(none) }}"
+  current_hvac_mode: "{{ states(climate_entity) }}"
+  thermostat_is_off: "{{ states(climate_entity) == 'off' }}"
 
   # Internal helper
   target_met: >-
@@ -151,6 +153,23 @@ action:
          and (states(target_temp_entity) | float(none)) is not none }}
 
   - choose:
+      # Respect manual OFF as a hard override. Do not change HVAC mode/preset.
+      - conditions:
+          - condition: template
+            value_template: "{{ thermostat_is_off }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ debug_log }}"
+                sequence:
+                  - service: logbook.log
+                    data:
+                      name: "Comfort Start"
+                      message: >-
+                        Thermostat is manually OFF at comfort time; skipping enforce/resume actions.
+                      entity_id: "{{ climate_entity }}"
+
       # If already at/above target, just resume.
       - conditions:
           - condition: template
