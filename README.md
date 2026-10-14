@@ -16,196 +16,184 @@
 
 ---
 
-**Status:** RC1-004 (Release Candidate 1) — Stable  
-**Platform:** Home Assistant (Pyscript-based)  
+**Status:** RC1-005 — release-candidate build  
+**Platform:** Home Assistant + Pyscript  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
 
-HVAC Comfort Start is an adaptive preheat controller for Home Assistant
-that learns how long your HVAC system actually needs to reach a desired
-comfort temperature and automatically schedules preheating so the target
-temperature is reached *at* the configured comfort time.
+HVAC Comfort Start is an adaptive preheat controller for Home Assistant. It learns how long a home and heating system actually need to recover from setback, then schedules heating so the selected comfort temperature is reached near the configured comfort time.
 
----
+RC1-005 expands the stable RC1-004 release with Fahrenheit / Celsius support, more flexible planning, improved learning accuracy, stronger safety handling, and easier configuration.
 
 ## When This Is Most Useful
 
-HVAC Comfort Start is especially effective in homes that use **temperature setback schedules**, such as lowering the thermostat overnight to save energy.
+HVAC Comfort Start is especially useful in homes that use meaningful temperature setbacks, particularly in colder climates where overnight recovery can take hours rather than minutes.
 
-Without adaptive preheating, setback strategies often create a tradeoff:
+Without adaptive preheating, setback schedules create a tradeoff:
 
-- Start heating too early → reduced energy savings  
-- Start heating too late → uncomfortable mornings  
+- Start heating too early → reduced setback savings
+- Start heating too late → uncomfortable mornings
 
-This system removes that tradeoff by learning how long your home actually takes to warm up and automatically starting preheat at the right time.
-
-The result is:
-
-- Maximum energy savings from overnight setback  
-- Comfortable temperature exactly at wake-up time  
-- No need to guess or manually adjust schedules  
-
----
+Comfort Start learns the recovery behavior instead of relying on a fixed early-start offset.
 
 ## Key Capabilities
 
-- Adaptive learning of heating performance based on real cycles
-- Accurate comfort-time arrival (not just “start early and hope”)
-- Stable control that avoids day-to-day oscillation
-- Persistent model state across restarts
-- Designed to prefer slight earliness over lateness
-- Validated on real-world modulating HVAC systems
-
----
-
-## Why Not Just Use a Smart Thermostat Feature?
-
-Many smart thermostats include features like “smart recovery” or “early start,” but these are typically:
-
-- Proprietary and opaque  
-- Limited to the thermostat’s internal sensors and logic  
-- Not persistent or tunable at the system level  
-
-HVAC Comfort Start operates at the Home Assistant level and is:
-
-- Thermostat-agnostic (works with any `climate` entity)  
-- Based on a transparent and persistent learning model  
-- Driven by real-world performance across full heating cycles  
-
-Because it separates planning, execution, and learning, it can:
-
-- Adapt more consistently across changing conditions  
-- Avoid hidden vendor heuristics  
-- Integrate with broader Home Assistant automations and data  
-
-In short, it turns preheating into a system-level control problem rather than a thermostat-specific feature.
-
----
+- Adaptive learning from real heating cycles
+- Predictive preheat scheduling to reach comfort temperature near the desired time
+- Fahrenheit / Celsius temperature support
+- Flexible planning and automatic recalculation when important settings change
+- Improved learning accuracy by ignoring constrained or non-representative cycles
+- Stronger safety handling for manual HVAC OFF and near-comfort conditions
+- Thermostat-agnostic Home Assistant integration
 
 ## How It Works
 
-The system separates the problem into three layers:
+### 1. Planning
 
-### 1. Planning (Recompute)
-
-Periodically calculates required preheat start time based on:
+Pyscript periodically recomputes the required preheat start from:
 
 - Current indoor temperature
-- Current outdoor temperature
-- Target temperature  
-- Learned heating rate (`k`)  
-- Learned systematic offset (`offset_min`)
-- Optional forecast bias  
+- Outdoor temperature
+- Target temperature
+- Learned heating rate `k`
+- Learned timing offset `offset_min`
+- Optional forecast bias
+- Occupancy
+- Min/max lead limits
+- Configured `active_hours`
 
----
+A 15-minute recompute is the fallback cadence. RC1-005 also includes a small blueprint that requests an immediate recompute when key planning inputs change.
 
 ### 2. Execution
 
-- A Home Assistant automation starts preheating at the computed time  
-- `input_boolean.preheat_active` marks the active preheat window  
+The Start blueprint normally fires at `input_datetime.preheat_start`.
 
----
+If recompute discovers that the calculated start is already in the past, Pyscript emits a scoped `hvac_comfort_start_start_due` event. The same Start blueprint handles that catch-up event, so vacation, occupancy, thermostat-mode, and near-comfort safeguards remain centralized.
 
-### 3. Learning (Arrival Evaluation)
+### 3. Arrival and Learning
 
-Arrival is detected when indoor temperature first reaches:
+Arrival is detected at:
 
-**(target − tolerance)**
+**target − tolerance**
 
-Learning is strictly bounded to:
+Learning is bounded to:
 
 **preheat start → first arrival**
 
-Arrival defines the end of the heating phase and terminates learning for
-that cycle. This prevents post-arrival modulation or holding behavior
-from influencing the model.
+The arrival-stop blueprint latches arrival once, then clears the active preheat state. At comfort time, Resume/Verify finalizes the cycle and updates the model.
 
-Arrival is latched once per cycle and treated as idempotent, ensuring
-that repeated threshold crossings or automation retriggers do not affect
-learning stability.
-
-An arrival-stop automation detects the first threshold crossing,
-marks arrival, and clears the active preheat state.
-
-At comfort time, the system evaluates timing accuracy and updates the
-model. This acts as a finalization step and ensures learning completes
-even if arrival was not detected during the preheat cycle.
-
----
-
-## Timing Accuracy
-
-Arrival time is adaptive and continuously improving, but not perfectly exact.
-
-Real-world heating performance varies from day to day due to changing outdoor conditions, internal heat loads, and system behavior. As a result, arrival may be slightly early or late on any given day.
-
-HVAC Comfort Start is designed to:
-
-- Minimize timing error over time  
-- Prefer slight earliness over lateness  
-- Avoid large swings or oscillation  
-
-The goal is not perfect precision, but **consistently accurate and stable arrival near the target comfort time**.
-
-The system continuously refines its model based on actual performance, reducing systematic bias while maintaining stability.
-
----
-
-## Preheat Flow (Simplified)
-
-<p align="center">
-  <img src="assets/preheat-flow.png" alt="HVAC Comfort Start Preheat Flow" width="500">
-</p>
-
-<p align="center">
-  Learning is based only on the active heating phase, stopping as soon as the target temperature is reached.
-</p>
-
----
+Cycles whose start time was constrained by min lead, max lead, `active_hours`, or the unoccupied lead cap are treated as **observation-only**. They do not alter `k` or `offset_min`, because their timing was constrained by policy rather than the model alone.
 
 ## Model Concepts
 
-### k (minutes per degree)
+### k
 
-Learned effective heating rate derived from full-cycle performance.
+Effective heating rate in **minutes per °F**.
+
+RC1-005 keeps the internal model in °F even on Celsius systems so existing learned model values remain valid. Temperature entities are normalized at the Pyscript boundary.
 
 ### offset_min
 
-Learned systematic bias (minutes) compensating for factors not captured
-by k alone (envelope loss, sensor lag, distribution delay, etc.).
+Learned timing bias in minutes for effects not fully captured by `k`.
 
-### Asymmetric Learning
+### Asymmetric Correction
 
-- Late arrivals corrected quickly  
-- Early arrivals corrected slowly  
-- Slight earliness preferred over lateness for stability  
+- Late arrivals are corrected relatively quickly
+- Early arrivals are corrected slowly
+- Slight earliness is preferred over repeated lateness
 
----
+## Celsius Support
 
-## Why Arrival-Based Learning Matters
+RC1-005 supports Celsius temperature sensors and target helpers. Pyscript converts temperatures to internal °F for model calculations, while the blueprints compare and command temperatures in Home Assistant's native unit.
 
-In many systems, learning continues after the target temperature is
-reached. On modulating HVAC systems, this introduces bias because the
-system reduces output and enters a holding phase.
+**Important:** the supplied helper package currently defines the target helper with Fahrenheit-oriented limits and `°F`. On a Celsius installation, the target helper must instead use Celsius values and the same native unit as the indoor sensor / climate entity. See `docs/INSTALL.md`.
 
-HVAC Comfort Start stops learning at the moment of arrival, ensuring the
-model reflects only the true heating phase. This produces more stable
-and accurate preheat timing over time.
+## Manual HVAC OFF
 
----
+A manually OFF thermostat is a hard override.
+
+When the configured climate entity is OFF:
+
+- Preheat will not start
+- Missed-start catch-up will not start heating
+- Comfort-time Resume/Verify will not re-enable heating
+- Arrival evaluation will not learn from the cold room
+
+## FAQ
+
+### Can comfort time vary by day?
+
+Yes. Use any Home Assistant schedule or automation to update `input_datetime.comfort_time`. RC1-005 detects the change and recalculates the required preheat start. Comfort Start does not need its own weekday/weekend scheduler.
+
+### Can the target temperature vary by day?
+
+Yes. A Home Assistant schedule or automation can update `input_number.hvac_comfort_start_target_temp`. Comfort Start will use the new target for subsequent planning.
+
+### Does Comfort Start work with Celsius?
+
+Yes. RC1-005 supports both Fahrenheit and Celsius temperature entities. The internal learned model remains in minutes per °F for backward compatibility, while temperature values are converted automatically at the Pyscript boundary.
+
+### What happens if the thermostat is manually OFF?
+
+Manual OFF is treated as a hard override. Comfort Start will not start heating, will not re-enable the thermostat at comfort time, and will not learn from that skipped cycle.
+
+### What if the house is already near the target temperature?
+
+The Start automation checks indoor temperature before starting preheat. If the home is already within the configured tolerance of the target, the preheat cycle is skipped.
+
+### Does it require a specific weather integration?
+
+No. Comfort Start can use compatible Home Assistant outdoor-temperature and forecast-low entities. It is not tied to a specific weather provider.
+
+### What happens if the calculated start time has already passed?
+
+RC1-005 can request an immediate catch-up start, while still applying the normal vacation, occupancy, thermostat-mode, and near-comfort safeguards.
+
+### Can it work when nobody is home?
+
+Yes. The unoccupied lead cap controls how much preheating is allowed when the occupancy sensor reports nobody home. Set the cap to match your preference.
+
+### Can HVAC Comfort Start be installed through HACS?
+
+Not yet. RC1-005 / RC1-final uses a multi-file Home Assistant setup that includes Pyscript, blueprints, helpers, and configuration files, so installation is currently handled from the GitHub repository. A more streamlined HACS-compatible package is being considered as a separate future effort after the current release is finalized and proven in production.
+
+### Does HVAC Comfort Start support multiple HVAC systems or zones?
+
+Not yet. RC1-005 / RC1-final is designed around one heating system, one indoor temperature source, and one comfort schedule.
+
+Multi-system and multi-zone support is a future development area. A future version could allow separate learned models, targets, schedules, and preheat calculations for each zone or HVAC system while keeping the same overall control approach.
+
+### Does HVAC Comfort Start base its calculations on long-term historical data?
+
+No. HVAC Comfort Start does not analyze months of Home Assistant history or require a large historical dataset before it can work.
+
+Instead, it learns incrementally from completed preheat cycles. After each valid cycle, it updates a small persistent model of how long the home actually takes to warm. Recent experience is blended with what the system has already learned, so the model gradually adapts over time.
+
+That approach is useful because home heating behavior is not perfectly linear. Outdoor temperature is only one influence; wind, sun versus cloud cover, internal heat gains, building thermal mass, and other changing conditions can all affect how quickly a house warms. Rather than trying to model every variable explicitly, HVAC Comfort Start learns from the actual result of each heating cycle.
+
+The learned model persists across restarts, and cycles affected by scheduling clamps or manual HVAC OFF are excluded so they do not distort learning.
+
+## Repository Layout
+
+- `blueprints/Furnace Automation/` — Start, Arrival Stop, Resume/Verify, and event-aware Recompute blueprints
+- `packages/` — helper package
+- `pyscript/` — main adaptive controller
+- `pyscript_modules/` — configuration I/O support
+- `docs/` — installation and architecture notes
 
 ## Version
 
-Current version: **RC1-004**
+Current development/release-candidate version: **RC1-005**
 
----
+The intended next release milestone is `rc1-final` after final repository and installation review.
 
 ## Notes
 
-Internal module and function names may still reference “furnace” for
-backward compatibility, but the system is fully HVAC-agnostic.
-
----
+Some internal module, file, and service names still reference “furnace” for backward compatibility. The public behavior is HVAC-oriented and works with a compatible Home Assistant `climate` entity.
 
 ### AI Disclosure
 
-Core system design, control strategy, and learning behavior were authored directly. AI was utilized as a development tool for code optimization and documentation structuring.
+HVAC Comfort Start is a one-person development project. AI was used as a development assistant for code review, troubleshooting, implementation support, test design, simulation work, and documentation.
+
+The project was developed iteratively over many hours of hands-on testing, including accelerated overnight simulation, targeted regression testing, and validation on the author's production Home Assistant system. The simulator substantially shortened the development cycle by allowing complete heating scenarios and edge cases to be exercised repeatedly without waiting for suitable weather or overnight conditions.
+
+The project requirements, control strategy, acceptance criteria, testing decisions, and final implementation choices were directed and validated by the author. AI accelerated the engineering process; it did not replace the testing or judgment required to determine whether the system actually worked.

@@ -1,32 +1,38 @@
 blueprint:
-  name: HVAC Comfort Start — Stop Learning at Arrival (RC1-004)
-  description: >
-    While a preheat session is active, latch ARRIVAL in pyscript and end preheat as soon as
-    indoor temperature first reaches (target - tolerance).
+  name: HVAC Comfort Start — Stop Learning at Arrival (RC1-005)
+  description: 'While a Comfort Start cycle is active, latch ARRIVAL in Pyscript when indoor temperature first reaches (target - tolerance). Keep the cycle active until comfort-time finalization.'
   domain: automation
-
   input:
     indoor_temp:
       name: Indoor temperature sensor
       selector:
         entity:
-          domain: sensor
-          device_class: temperature
-
+          domain:
+          - sensor
+          device_class:
+          - temperature
+          multiple: false
+          reorder: false
     target_temp_helper:
       name: Target temperature helper
       selector:
         entity:
-          domain: input_number
-
+          domain:
+          - input_number
+          multiple: false
+          reorder: false
     preheat_active:
       name: Preheat active boolean
       selector:
         entity:
-          domain: input_boolean
-
+          domain:
+          - input_boolean
+          multiple: false
+          reorder: false
     tolerance:
-      name: Arrival tolerance
+      name: Arrival tolerance (°F-equivalent)
+      description: Internal learning tolerance in °F-equivalent; converted automatically
+        for Celsius sensors.
       default: 0.3
       selector:
         number:
@@ -34,63 +40,48 @@ blueprint:
           max: 5.0
           step: 0.1
           mode: box
-          unit_of_measurement: "°"
-
+          unit_of_measurement: °
     debug_log:
       name: Debug logging
       default: false
       selector:
         boolean: {}
-
 mode: single
-
 variables:
   indoor_temp_entity: !input indoor_temp
   target_temp_entity: !input target_temp_helper
   preheat_active_entity: !input preheat_active
   tolerance: !input tolerance
   debug_log: !input debug_log
-
-  arrived: >-
-    {% set ti = states(indoor_temp_entity) | float(none) %}
-    {% set tt = states(target_temp_entity) | float(none) %}
-    {% if ti is none or tt is none %}
-      false
-    {% else %}
-      {{ ti >= (tt - (tolerance | float(0))) }}
-    {% endif %}
-
+  tolerance_native: '{% set u = state_attr(indoor_temp_entity, ''unit_of_measurement'')
+    | string | upper %} {% set tf = tolerance | float(0.3) %} {{ (tf * 5 / 9) if u
+    in [''°C'', ''C'', ''CELSIUS''] else tf }}'
+  arrived: "{% set ti = states(indoor_temp_entity) | float(none) %} {% set tt = states(target_temp_entity)
+    | float(none) %} {% if ti is none or tt is none %}\n  false\n{% else %}\n  {{
+    ti >= (tt - (tolerance_native | float(0))) }}\n{% endif %}"
 triggers:
-  - trigger: state
-    entity_id: !input indoor_temp
-
+- trigger: state
+  entity_id: !input indoor_temp
 conditions:
-  - condition: state
-    entity_id: !input preheat_active
-    state: "on"
-  - condition: template
-    value_template: "{{ arrived }}"
-
+- condition: state
+  entity_id: !input preheat_active
+  state: 'on'
+- condition: template
+  value_template: '{{ arrived }}'
 actions:
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ debug_log }}"
-        sequence:
-          - action: logbook.log
-            data:
-              name: "HVAC Comfort Start"
-              message: >-
-                ARRIVAL reached. Indoor={{ states(indoor_temp_entity) }},
-                Target={{ states(target_temp_entity) }}, Tol={{ tolerance }}.
-                Signaling pyscript and ending preheat.
-              entity_id: "{{ preheat_active_entity }}"
-
-  - action: pyscript.furnace_preheat_mark_arrival
-    data:
-      arrival_tolerance: "{{ tolerance | float(0.3) }}"
-      reason: "threshold"
-
-  - action: input_boolean.turn_off
-    target:
-      entity_id: !input preheat_active
+- choose:
+  - conditions:
+    - condition: template
+      value_template: '{{ debug_log }}'
+    sequence:
+    - action: logbook.log
+      data:
+        name: HVAC Comfort Start
+        message: ARRIVAL reached. Indoor={{ states(indoor_temp_entity) }}, Target={{
+          states(target_temp_entity) }}, Tol(native)={{ tolerance_native }}, Tol(F-equiv)={{
+          tolerance }}. Signaling Pyscript; cycle remains active until comfort-time finalization.
+        entity_id: '{{ preheat_active_entity }}'
+- action: pyscript.furnace_preheat_mark_arrival
+  data:
+    arrival_tolerance: '{{ tolerance | float(0.3) }}'
+    reason: threshold

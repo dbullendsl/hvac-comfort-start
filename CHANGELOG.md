@@ -2,10 +2,17 @@
 
 ## HVAC Comfort Start — Release Candidate 1 (RC1)
 
-### Status
-Feature complete. Stable. Learning window finalized.
+### RC1-005 — Planning, Portability, and Safety Refinement
+
+- Added full **Fahrenheit / Celsius temperature support** 
+- Improved **planning flexibility** 
+- Improved **learning accuracy** 
+- Improved **safety and error handling**
+- Improved **portability and configuration** 
+
 
 ---
+
 ### RC1-004 - Respect manual HVAC OFF state in start and resume automations
 
 Fix: Manual thermostat OFF is now respected

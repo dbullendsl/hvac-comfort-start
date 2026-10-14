@@ -1,100 +1,170 @@
-# HVAC Comfort Start — Installation Guide (RC1-004)
+# HVAC Comfort Start — Installation Guide (RC1-005)
 
-This guide walks through installing **HVAC Comfort Start — Adaptive Preheat** into Home Assistant using Pyscript.
-
----
+This guide installs HVAC Comfort Start into Home Assistant using Pyscript and four automation blueprints.
 
 ## Prerequisites
 
-- Home Assistant Core or OS
+- Home Assistant Core or Home Assistant OS
 - Pyscript integration installed
-- A working `climate` entity
+- A working heating-capable `climate` entity
 - Indoor temperature sensor
-- Comfort time helper (`input_datetime`)
-
----
+- Outdoor temperature sensor
+- Comfort time helper
+- Occupancy and vacation entities if those protections are used
 
 ## Files and Locations
 
-| Repository Path                                   | Home Assistant Path                                      |
-|--------------------------------------------------|----------------------------------------------------------|
-| `blueprints/Furnace Automations/*.yaml`          | `/config/blueprints/automation/Furnace Automations/`    |
-| `packages/furnace_preheat_helpers.yaml`          | `/config/packages/furnace_preheat_helpers.yaml`          |
-| `pyscript/furnace_preheat.py`                    | `/config/pyscript/furnace_preheat.py`                    |
-| `pyscript_modules/furnace_config_io.py`          | `/config/pyscript_modules/furnace_config_io.py`          |
-
----
+| Repository Path | Home Assistant Path |
+|---|---|
+| `blueprints/Furnace Automation/*.yaml` | `/config/blueprints/automation/Furnace Automation/` |
+| `packages/furnace_preheat_helpers.yaml` | `/config/packages/furnace_preheat_helpers.yaml` |
+| `pyscript/furnace_preheat.py` | `/config/pyscript/furnace_preheat.py` |
+| `pyscript/data/furnace_preheat_config.json` | `/config/pyscript/data/furnace_preheat_config.json` |
+| `pyscript_modules/furnace_config_io.py` | `/config/pyscript_modules/furnace_config_io.py` |
 
 ## Step 1 — Copy Files
 
-Copy all files into the corresponding Home Assistant directories.
-
----
+Copy the repository files into the corresponding Home Assistant directories.
 
 ## Step 2 — Enable Packages
 
-Ensure `configuration.yaml` includes:
+Ensure packages are enabled in Home Assistant:
 
 ```yaml
 homeassistant:
   packages: !include_dir_named packages
 ```
 
-Restart Home Assistant if needed.
+Restart Home Assistant if required after adding the package include.
 
----
+## Step 3 — Review the Pyscript Config
 
-## Step 3 — Reload Pyscript
+Edit `/config/pyscript/data/furnace_preheat_config.json` for your installation.
 
-Go to Developer Tools → YAML → Reload Pyscript.
+Important fields:
 
----
+- `climate`
+- `indoor_temp`
+- `outdoor_temp`
+- `forecast_low`
+- `occupied_binary`
+- `vacation`
+- `comfort_time`
+- `preheat_start`
+- `target_temp_helper`
+- `active_hours`
 
-## Step 4 — Import Blueprints
+Example:
 
-- Import the included blueprints  
-- Create automations for:
-  - Start Preheat  
-  - Arrival Stop  
-  - Comfort Time Evaluation  
+```json
+{
+  "climate": "climate.daikin",
+  "indoor_temp": "sensor.indoor_temperature",
+  "outdoor_temp": "sensor.main_room_outdoor_air_temperature",
+  "forecast_low": "sensor.nws_overnight_low_temperature",
+  "occupied_binary": "binary_sensor.family_home",
+  "vacation": "input_boolean.vacation",
+  "comfort_time": "input_datetime.comfort_time",
+  "preheat_start": "input_datetime.preheat_start",
+  "target_temp_helper": "input_number.hvac_comfort_start_target_temp",
+  "target_temp": null,
+  "active_hours": ["01:00:00", "23:00:00"],
+  "forecast_hours_ahead": 8
+}
+```
 
----
+### active_hours
 
-## Step 5 — Verify Operation
+`active_hours` is the planning window. RC1-005 no longer has a hard-coded 02:00–07:59 recompute window.
 
-Confirm the following behavior:
+The supplied example uses 01:00–23:00. Choose a window that allows the earliest legitimate start for your schedule.
 
-- Preheat start time is calculated and written  
-- Preheat begins at the scheduled time  
-- Arrival is detected at **(target − tolerance)**  
-- `input_boolean.preheat_active` is cleared at arrival  
-- Evaluation runs at comfort time  
+Midnight-spanning windows are supported.
 
----
+## Step 4 — Reload Pyscript
 
-## Understanding Arrival-Based Behavior (RC1-004)
+Reload Pyscript after copying or changing the controller/config files.
 
-During a preheat cycle, the system will stop active preheating when indoor temperature first reaches:
+## Step 5 — Create Automations from the Four Blueprints
 
-(target − tolerance)
+Create one automation from each included blueprint:
 
-At that moment:
+1. **HVAC Comfort Start — Start at Computed Preheat Time**
+2. **HVAC Comfort Start — Stop Learning at Arrival**
+3. **HVAC Comfort Start — Resume/Verify at Comfort Time**
+4. **HVAC Comfort Start — Recompute on Planning Input Changes**
 
-- Arrival is recorded  
-- `input_boolean.preheat_active` is cleared  
-- Learning for that cycle is finalized  
+Use selectors to choose the same climate, target, indoor-temperature, comfort-time, preheat-active, occupancy, vacation, and lead-cap helpers used by your installation.
 
-If arrival is not reached:
+The event-aware recompute blueprint should point to the same climate entity, comfort-time helper, target helper, and preheat-active helper.
 
-- Evaluation occurs at comfort time as a fallback  
+## Step 6 — Verify Helpers
 
-Learning is effectively bounded to the active heating phase, ending at arrival rather than at comfort time. This prevents post-arrival modulation or holding behavior from influencing the model.
+The supplied package creates:
 
-This behavior is essential for accurate operation on modulating HVAC systems, ensuring learning reflects only the true heating phase.
+- `input_datetime.preheat_start`
+- `input_datetime.comfort_time`
+- `input_number.preheat_min_lead`
+- `input_number.preheat_max_lead`
+- `input_number.preheat_unoccupied_cap`
+- `input_number.hvac_comfort_start_target_temp`
+- `input_text.furnace_model_json`
+- `input_boolean.preheat_active`
 
----
+## Fahrenheit and Celsius
+
+RC1-005 Pyscript supports both Fahrenheit and Celsius temperature entities. The learned model remains minutes per °F internally.
+
+The Home Assistant blueprints operate in native entity units, so the **target helper must use the same temperature scale as the indoor sensor and climate entity**.
+
+### Fahrenheit
+
+The supplied package is currently Fahrenheit-oriented:
+
+```yaml
+hvac_comfort_start_target_temp:
+  min: 50
+  max: 80
+  step: 0.5
+  unit_of_measurement: "°F"
+  icon: mdi:thermometer
+```
+
+### Celsius
+
+For a Celsius installation, define the same helper entity ID with Celsius-appropriate limits and values, for example:
+
+```yaml
+hvac_comfort_start_target_temp:
+  name: HVAC Comfort Target Temperature
+  min: 10
+  max: 30
+  step: 0.5
+  unit_of_measurement: "°C"
+  icon: mdi:thermometer
+```
+
+Do not convert the learned model JSON manually. RC1-005 performs the temperature conversion at runtime.
+
+## Step 7 — Verify Operation
+
+Confirm:
+
+- recompute writes a plausible `preheat_start`
+- changing target or comfort time causes an immediate recompute
+- heating starts at the computed time
+- a missed start catches up immediately while comfort time is still ahead
+- arrival is detected at target minus tolerance
+- `preheat_active` clears at arrival
+- Resume/Verify runs at comfort time
+- a manually OFF thermostat remains OFF
+
+## Learning and Clamps
+
+If a cycle is constrained by min lead, max lead, active-hours boundaries, or the unoccupied lead cap, RC1-005 will not learn `k` or `offset_min` from that cycle.
+
+This is intentional: a constrained start does not represent an unconstrained model prediction.
 
 ## Notes
 
-- Internal names may still reference "furnace"
-- System is HVAC-agnostic
+Internal file and service names may still reference “furnace” for backward compatibility. The controller itself is HVAC-agnostic.

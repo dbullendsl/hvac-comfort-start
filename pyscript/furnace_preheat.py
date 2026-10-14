@@ -1,5 +1,5 @@
 # HVAC Comfort Start — Adaptive Preheat
-# Version: RC1-004 (builds on Beta 9 baseline)
+# Version: RC1-005
 #
 # DEV DIAGNOSTICS (LOCAL-ONLY, NO GIT):
 # - Toggle: input_boolean.hvac_dev_diagnostics
@@ -49,6 +49,56 @@ def _entity_f(eid, default=0.0):
         return default
 
 
+def _entity_unit(eid):
+    """Return an entity's unit_of_measurement attribute when available."""
+    try:
+        attrs = state.getattr(eid)
+        if isinstance(attrs, dict):
+            unit = attrs.get("unit_of_measurement")
+            if unit is not None:
+                return str(unit)
+    except Exception:
+        pass
+    return None
+
+
+def _temp_to_f(value, unit):
+    """Convert a native HA temperature value to internal °F."""
+    try:
+        v = float(value)
+    except Exception:
+        return 0.0
+
+    u = str(unit or "").strip().upper()
+    if u in ("°C", "C", "CELSIUS"):
+        return (v * 9.0 / 5.0) + 32.0
+    return v
+
+
+def _temp_from_f(value_f, unit):
+    """Convert an internal °F temperature value to an entity's native unit."""
+    try:
+        v = float(value_f)
+    except Exception:
+        return 0.0
+
+    u = str(unit or "").strip().upper()
+    if u in ("°C", "C", "CELSIUS"):
+        return (v - 32.0) * 5.0 / 9.0
+    return v
+
+
+def _temp_f(eid, default=0.0):
+    """Read a temperature entity and normalize it to internal °F."""
+    try:
+        v = state.get(eid)
+        if v in (None, "unknown", "unavailable"):
+            return default
+        return _temp_to_f(v, _entity_unit(eid))
+    except Exception:
+        return default
+
+
 def _entity_onoff(eid, default_off=True):
     """
     Interpret an entity as on/off.
@@ -72,6 +122,8 @@ EVAL_CSV = os.path.join(DIAG_DIR, "dev_eval.csv")
 CAPTURE_CSV = os.path.join(DIAG_DIR, "dev_capture.csv")
 
 def _diag_enabled():
+    if diag_csv_writer is None:
+        return False
     v = _entity(DIAG_TOGGLE, "off")
     return str(v).lower() == "on"
 
@@ -93,7 +145,11 @@ def _csv_cell(v):
         s = '"' + s + '"'
     return s
 
-import diag_csv_writer
+try:
+    import diag_csv_writer
+except ModuleNotFoundError:
+    diag_csv_writer = None
+    log.warning("HVAC Comfort Start: optional diag_csv_writer module missing; CSV diagnostics disabled")
 
 async def _csv_append(path, header, line, newfile):
     await task.executor(diag_csv_writer.append_csv, path, header, line, newfile)
@@ -139,7 +195,10 @@ async def diag_eval(ts, kind, arrival_ts, comfort, arrival_offset_min,
 # -----------------------------
 
 # Captured at the moment preheat becomes active (used for cycle-based k)
-CYCLE = {"start_ts": None, "start_t": None}
+CYCLE = {"start_ts": None, "start_t": None, "clamped": False, "clamp_reason": None}
+
+# Most recent schedule decision. Used to carry clamp context into the cycle.
+PLAN = {"start_s": None, "clamped": False, "clamp_reason": None}
 
 # RC1-004: ARRIVAL latch captured at first threshold hit (idempotent)
 ARRIVAL = {"ts": None, "t": None, "reason": None}
@@ -185,6 +244,30 @@ def _resolve_active_hours(cfg):
     return [start, end]
 
 
+
+def _within_active_hours(now, active_hours):
+    """Return True when now falls inside the configured active-hours window.
+
+    Equal start/end means a 24-hour window. Midnight-spanning windows are
+    supported (for example 21:00:00 -> 08:00:00).
+    """
+    try:
+        start_s = active_hours[0]
+        end_s = active_hours[1]
+        now_s = now.strftime("%H:%M:%S")
+
+        if start_s == end_s:
+            return True
+
+        if start_s < end_s:
+            return (now_s >= start_s) and (now_s <= end_s)
+
+        return (now_s >= start_s) or (now_s <= end_s)
+    except Exception as e:
+        log.warning("furnace_preheat: active_hours check failed; allowing recompute: %s", e)
+        return True
+
+
 def _resolve_forecast_hours(cfg):
     default = 8
     raw = cfg.get("forecast_hours_ahead", default)
@@ -203,13 +286,16 @@ def _resolve_forecast_hours(cfg):
 
 
 def _resolve_target_temp(cfg):
-    """RC1 precedence: helper -> legacy JSON numeric -> hard default."""
-    helper = "input_number.hvac_comfort_start_target_temp"
+    """RC1 precedence: configured helper -> default helper -> legacy numeric -> hard default."""
+    helper = _clean_entity_id(
+        cfg.get("target_temp_helper"),
+        "input_number.hvac_comfort_start_target_temp",
+    )
 
     try:
         v = state.get(helper)
         if v not in (None, "unknown", "unavailable", ""):
-            return float(v), "helper"
+            return _temp_to_f(float(v), _entity_unit(helper)), "helper"
     except Exception:
         pass
 
@@ -243,7 +329,7 @@ async def _load_cfg():
         cfg = {}
 
     target, target_source = _resolve_target_temp(cfg)
-    log.debug("furnace_preheat: resolved target temperature = %.1fF (source=%s)", target, target_source)
+    log.debug("furnace_preheat: resolved target temperature = %.1fF internal (source=%s)", target, target_source)
 
     return {
         "climate": _clean_entity_id(cfg.get("climate"), defaults["climate"]),
@@ -255,6 +341,10 @@ async def _load_cfg():
         "comfort": _clean_entity_id(cfg.get("comfort_time"), defaults["comfort"]),
         "preheat": _clean_entity_id(cfg.get("preheat_start"), defaults["preheat"]),
         "target": target,
+        "target_helper": _clean_entity_id(
+            cfg.get("target_temp_helper"),
+            "input_number.hvac_comfort_start_target_temp",
+        ),
         "active_hours": _resolve_active_hours(cfg),
         "forecast_hours": _resolve_forecast_hours(cfg),
         "min_lead": _clean_entity_id(cfg.get("min_lead"), defaults["min_lead"]),
@@ -328,7 +418,58 @@ async def furnace_preheat_capture_start(value=None, old_value=None):
 
     cfg = await _load_cfg()
     CYCLE["start_ts"] = datetime.now()
-    CYCLE["start_t"] = _entity_f(cfg["indoor"])
+    CYCLE["start_t"] = _temp_f(cfg["indoor"])
+
+    planned_start_s = _entity(cfg["preheat"], None)
+    if (PLAN["start_s"] is not None) and (planned_start_s == PLAN["start_s"]):
+        CYCLE["clamped"] = bool(PLAN["clamped"])
+        CYCLE["clamp_reason"] = PLAN["clamp_reason"]
+    else:
+        # Restart-safe fallback: infer whether the stored scheduled start sits
+        # exactly on one of the configured scheduling constraints.
+        inferred_reasons = []
+        try:
+            comfort_s = _entity(cfg["comfort"], "06:00:00")
+            cp = comfort_s.split(":")
+            comfort_dt = CYCLE["start_ts"].replace(
+                hour=int(cp[0]), minute=int(cp[1]), second=int(cp[2]), microsecond=0
+            )
+            if comfort_dt <= CYCLE["start_ts"]:
+                comfort_dt = comfort_dt + timedelta(days=1)
+
+            sp = planned_start_s.split(":")
+            scheduled_dt = comfort_dt.replace(
+                hour=int(sp[0]), minute=int(sp[1]), second=int(sp[2]), microsecond=0
+            )
+            if scheduled_dt > comfort_dt:
+                scheduled_dt = scheduled_dt - timedelta(days=1)
+
+            scheduled_lead = (comfort_dt - scheduled_dt).total_seconds() / 60.0
+
+            min_lead = _entity_f(cfg["min_lead"], 0.0)
+            max_lead = _entity_f(cfg["max_lead"], 240.0)
+            if min_lead > 0.0 and abs(scheduled_lead - min_lead) <= 0.2:
+                inferred_reasons.append("min_lead")
+            if max_lead > 0.0 and abs(scheduled_lead - max_lead) <= 0.2:
+                inferred_reasons.append("max_lead")
+
+            if not _entity_onoff(cfg["occupied"], default_off=False):
+                cap = _entity_f(cfg["unocc_cap"], 0.0)
+                if cap > 0.0 and abs(scheduled_lead - cap) <= 0.2:
+                    inferred_reasons.append("unoccupied_cap")
+
+            if planned_start_s == cfg["active_hours"][0]:
+                inferred_reasons.append("active_hours_start")
+            if planned_start_s == cfg["active_hours"][1]:
+                inferred_reasons.append("active_hours_end")
+        except Exception as e:
+            log.debug("furnace_preheat: clamp inference skipped: %s", e)
+
+        CYCLE["clamped"] = len(inferred_reasons) > 0
+        if CYCLE["clamped"]:
+            CYCLE["clamp_reason"] = ",".join(inferred_reasons)
+        else:
+            CYCLE["clamp_reason"] = None
 
     # RC1-004: reset arrival latch for new session
     ARRIVAL["ts"] = None
@@ -344,13 +485,13 @@ async def furnace_preheat_capture_start(value=None, old_value=None):
     try:
         ts = CYCLE["start_ts"].isoformat()
 
-        outside = _entity_f(cfg["outdoor"], 0.0)
-        f_low = _entity_f(cfg["forecast_low"], outside)
+        outside = _temp_f(cfg["outdoor"], 0.0)
+        f_low = _temp_f(cfg["forecast_low"], outside)
 
         if CYCLE["start_t"] is not None:
             inside = float(CYCLE["start_t"])
         else:
-            inside = _entity_f(cfg["indoor"], 0.0)
+            inside = _temp_f(cfg["indoor"], 0.0)
 
         target = float(cfg["target"])
         setback = target - inside
@@ -382,12 +523,13 @@ async def furnace_preheat_dump_config():
 
 @service
 async def furnace_preheat_mark_arrival(arrival_tolerance: float = 0.3, reason: str = "threshold"):
+    # arrival_tolerance is always expressed in °F-equivalent; all model math is internal °F.
     # Idempotent
     if ARRIVAL["ts"] is not None:
         return
 
     cfg = await _load_cfg()
-    indoor = _entity_f(cfg["indoor"])
+    indoor = _temp_f(cfg["indoor"])
     target = float(cfg["target"])
 
     tol = 0.3
@@ -417,9 +559,17 @@ async def furnace_preheat_mark_arrival(arrival_tolerance: float = 0.3, reason: s
 @service
 async def furnace_preheat_evaluate_arrival():
     cfg = await _load_cfg()
+
+    # Manual thermostat OFF is a hard override and not a valid learning cycle.
+    # Never interpret a cold room in this state as a failed preheat.
+    hvac_mode = str(_entity(cfg["climate"], "") or "").lower()
+    if hvac_mode == "off":
+        log.info("furnace_preheat: arrival evaluation skipped; thermostat is OFF")
+        return
+
     model = _get_model()
 
-    indoor_now = _entity_f(cfg["indoor"])
+    indoor_now = _temp_f(cfg["indoor"])
     target = float(cfg["target"])
 
     k_model = float(model.get("k", DEFAULT_MODEL["k"]))
@@ -471,6 +621,16 @@ async def furnace_preheat_evaluate_arrival():
     if k_cycle is not None:
         if k_cycle > k_used:
             k_used = k_cycle
+
+    # RC1-005: clamped cycles are observation-only.
+    # Their timing is constrained by policy rather than purely by the model,
+    # so do not update k or offset from them.
+    if bool(CYCLE.get("clamped", False)):
+        log.info(
+            "furnace_preheat: learning skipped for clamped cycle. reason=%s k_model=%.2f offset=%.1f"
+            % (CYCLE.get("clamp_reason", "unknown"), k_model, offset)
+        )
+        return
 
     # --- Primary path: time-based arrival error if ARRIVAL exists ---
     if ARRIVAL["ts"] is not None:
@@ -647,6 +807,12 @@ async def learn_from_slope():
         SAMPLE["last_ts"] = None
         return
 
+    # RC1-005: never slope-learn from a cycle whose start was clamped.
+    if bool(CYCLE.get("clamped", False)):
+        SAMPLE["last_t"] = None
+        SAMPLE["last_ts"] = None
+        return
+
     # RC1-004: if ARRIVAL is latched, stop slope learning for the remainder of the session
     if ARRIVAL["ts"] is not None:
         SAMPLE["last_t"] = None
@@ -659,7 +825,7 @@ async def learn_from_slope():
         SAMPLE["last_ts"] = None
         return
 
-    indoor = _entity_f(cfg["indoor"])
+    indoor = _temp_f(cfg["indoor"])
     target = float(cfg["target"])
 
     if indoor >= (target - 1.0):
@@ -716,11 +882,17 @@ async def learn_from_slope():
 # -----------------------------
 
 @service
-@time_trigger("cron(0 21 * * *)")      # 21:00 daily
-@time_trigger("cron(30 23 * * *)")     # 23:30 daily
-@time_trigger("cron(*/15 2-7 * * *)")  # every 15 minutes from 02:00–07:59
+@time_trigger("cron(*/15 * * * *)")  # every 15 minutes; active_hours gates actual planning
 async def furnace_preheat_recompute():
     cfg = await _load_cfg()
+    now = datetime.now()
+
+    if not _within_active_hours(now, cfg["active_hours"]):
+        log.debug(
+            "furnace_preheat: recompute skipped (outside active_hours %s-%s). now=%s"
+            % (cfg["active_hours"][0], cfg["active_hours"][1], now.strftime("%H:%M:%S"))
+        )
+        return
 
     if _entity_onoff(cfg["vacation"]):
         log.info("furnace_preheat: vacation mode active; skipping schedule")
@@ -736,14 +908,39 @@ async def furnace_preheat_recompute():
         mm = int(parts[1])
         ss = int(parts[2])
         return base_dt.replace(hour=hh, minute=mm, second=ss, microsecond=0)
-    now = datetime.now()
     comfort_today = _mk_on(now, comfort)
     if comfort_today > now:
         comfort_dt = comfort_today
     else:
         comfort_dt = _mk_on(now + timedelta(days=1), comfort)
 
-    # Freeze guard
+    # RC1-005 daily/post-comfort guard.
+    # Do not plan the next comfort cycle until that cycle's configured
+    # active-hours start has arrived. This prevents daytime/post-comfort
+    # recomputes from scheduling or catching up the following day's run.
+    try:
+        plan_start_s = cfg["active_hours"][0]
+        plan_start_dt = _mk_on(comfort_dt, plan_start_s)
+        if plan_start_dt >= comfort_dt:
+            plan_start_dt = plan_start_dt - timedelta(days=1)
+
+        if (cfg["active_hours"][0] != cfg["active_hours"][1]) and (now < plan_start_dt):
+            log.debug(
+                "furnace_preheat: recompute skipped (next-cycle planning not open). now=%s plan_start=%s comfort=%s"
+                % (
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
+                    plan_start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    comfort_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+            )
+            return
+    except Exception as e:
+        log.warning("furnace_preheat: post-comfort planning guard failed; continuing: %s", e)
+
+    current = _temp_f(cfg["indoor"])
+    target = float(cfg["target"])
+
+    # Freeze guard, with RC1-005 missed-start recovery.
     existing_start_s = _entity(cfg["preheat"], None)
     if existing_start_s:
         try:
@@ -756,8 +953,34 @@ async def furnace_preheat_recompute():
             if existing_start_dt > comfort_dt:
                 existing_start_dt = existing_start_dt - timedelta(days=1)
 
+            # If the stored start has already passed and preheat never became
+            # active, recover immediately rather than letting the freeze guard
+            # suppress the missed-start catch-up.
+            if (
+                (now >= existing_start_dt)
+                and (now < comfort_dt)
+                and (not _entity_onoff("input_boolean.preheat_active", default_off=True))
+                and (current < (target - 0.3))
+            ):
+                event.fire(
+                    "hvac_comfort_start_start_due",
+                    preheat_entity=cfg["preheat"],
+                    calculated_start=existing_start_dt.strftime("%H:%M:%S"),
+                    comfort_time=comfort_dt.strftime("%H:%M:%S"),
+                    reason="missed_existing_start",
+                )
+                log.info(
+                    "furnace_preheat: missed stored start catch-up requested. existing_start=%s now=%s comfort=%s"
+                    % (
+                        existing_start_dt.strftime("%H:%M:%S"),
+                        now.strftime("%H:%M:%S"),
+                        comfort_dt.strftime("%H:%M:%S"),
+                    )
+                )
+                return
+
             freeze_window_min = 15
-            if datetime.now() >= (existing_start_dt - timedelta(minutes=freeze_window_min)):
+            if now >= (existing_start_dt - timedelta(minutes=freeze_window_min)):
                 log.info(
                     "furnace_preheat: recompute skipped (freeze window). existing_start=%s"
                     % existing_start_dt.strftime("%H:%M:%S")
@@ -769,10 +992,7 @@ async def furnace_preheat_recompute():
     model = _get_model()
     k = float(model.get("k", DEFAULT_MODEL["k"]))
     offset_min = float(model.get("offset_min", 0.0))
-
-    current = _entity_f(cfg["indoor"])
-    target = float(cfg["target"])
-    outdoor = _entity_f(cfg["outdoor"])
+    outdoor = _temp_f(cfg["outdoor"])
 
     delta = target - current
     if delta < 0.0:
@@ -781,7 +1001,7 @@ async def furnace_preheat_recompute():
     bias = 1.0
 
     # Forecast bias uses your helper entity
-    f_low = _entity_f(cfg["forecast_low"], outdoor)
+    f_low = _temp_f(cfg["forecast_low"], outdoor)
     drop = outdoor - f_low
     if drop < 0.0:
         drop = 0.0
@@ -791,6 +1011,7 @@ async def furnace_preheat_recompute():
         bias = bias + 0.20
 
     lead_min = (k * delta * bias) + offset_min
+    clamp_reasons = []
 
     occupied = _entity_onoff(cfg["occupied"], default_off=False)
     if not occupied:
@@ -803,6 +1024,7 @@ async def furnace_preheat_recompute():
                 cap = 0.0
         if cap > 0.0 and lead_min > cap:
             lead_min = cap
+            clamp_reasons.append("unoccupied_cap")
 
     min_lead_raw = _entity(cfg["min_lead"], None)
     max_lead_raw = _entity(cfg["max_lead"], None)
@@ -822,8 +1044,10 @@ async def furnace_preheat_recompute():
 
     if lead_min < min_lead:
         lead_min = min_lead
+        clamp_reasons.append("min_lead")
     if lead_min > max_lead:
         lead_min = max_lead
+        clamp_reasons.append("max_lead")
 
     start_dt = comfort_dt - timedelta(minutes=lead_min)
 
@@ -844,8 +1068,10 @@ async def furnace_preheat_recompute():
 
         if start_dt < win_start:
             start_dt = win_start
+            clamp_reasons.append("active_hours_start")
         if start_dt > win_end:
             start_dt = win_end
+            clamp_reasons.append("active_hours_end")
     except Exception as e:
         log.debug("furnace_preheat: window clamp skipped: %s", e)
 
@@ -855,6 +1081,38 @@ async def furnace_preheat_recompute():
         entity_id=cfg["preheat"],
         time=start_dt.strftime("%H:%M:%S"),
     )
+
+    PLAN["start_s"] = start_dt.strftime("%H:%M:%S")
+    PLAN["clamped"] = len(clamp_reasons) > 0
+    if PLAN["clamped"]:
+        PLAN["clamp_reason"] = ",".join(clamp_reasons)
+    else:
+        PLAN["clamp_reason"] = None
+
+    # RC1-005: missed-start catch-up.
+    # If a fresh recompute says we should already be heating, emit an event
+    # that the Start blueprint can handle through its normal safety conditions.
+    if (
+        (start_dt <= now)
+        and (now < comfort_dt)
+        and (not _entity_onoff("input_boolean.preheat_active", default_off=True))
+        and (current < (target - 0.3))
+    ):
+        event.fire(
+            "hvac_comfort_start_start_due",
+            preheat_entity=cfg["preheat"],
+            calculated_start=start_dt.strftime("%H:%M:%S"),
+            comfort_time=comfort_dt.strftime("%H:%M:%S"),
+            reason="missed_start",
+        )
+        log.info(
+            "furnace_preheat: missed start catch-up requested. calculated_start=%s now=%s comfort=%s"
+            % (
+                start_dt.strftime("%H:%M:%S"),
+                now.strftime("%H:%M:%S"),
+                comfort_dt.strftime("%H:%M:%S"),
+            )
+        )
 
     log.info(
         "furnace_preheat: delta=%.1fF k=%.2f bias=%.2f offset=%.1fm occ=%s lead=%.0fm start=%s comfort=%s"

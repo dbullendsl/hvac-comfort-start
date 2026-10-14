@@ -1,0 +1,61 @@
+blueprint:
+  name: HVAC Comfort Start — Recompute on Planning Input Changes (RC1-005)
+  description: Recompute the Comfort Start schedule immediately when key planning
+    inputs change.
+  domain: automation
+  input:
+    climate:
+      name: Climate entity
+      selector:
+        entity:
+          domain:
+          - climate
+          multiple: false
+          reorder: false
+    comfort_time:
+      name: Comfort Time helper
+      selector:
+        entity:
+          domain:
+          - input_datetime
+          multiple: false
+          reorder: false
+    target_temp_helper:
+      name: Target temperature helper
+      selector:
+        entity:
+          domain:
+          - input_number
+          multiple: false
+          reorder: false
+    preheat_active:
+      name: Preheat Active helper
+      selector:
+        entity:
+          domain:
+          - input_boolean
+          multiple: false
+          reorder: false
+trigger:
+- platform: state
+  entity_id: !input climate
+  id: hvac_mode_change
+- platform: state
+  entity_id: !input comfort_time
+  id: comfort_time_change
+- platform: state
+  entity_id: !input target_temp_helper
+  id: target_change
+condition:
+- condition: state
+  entity_id: !input preheat_active
+  state: 'off'
+- condition: template
+  value_template: >-
+    {{ trigger.id != 'hvac_mode_change'
+       or (trigger.from_state is not none
+           and trigger.to_state is not none
+           and trigger.from_state.state != trigger.to_state.state) }}
+action:
+- service: pyscript.furnace_preheat_recompute
+mode: restart

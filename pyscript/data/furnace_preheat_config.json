@@ -7,7 +7,8 @@
   "vacation": "input_boolean.vacation",
   "comfort_time": "input_datetime.comfort_time",
   "preheat_start": "input_datetime.preheat_start",
+  "target_temp_helper": "input_number.hvac_comfort_start_target_temp",
   "target_temp": null,
-  "active_hours": ["02:00:00", "23:00:00"],
+  "active_hours": ["01:00:00", "23:00:00"],
   "forecast_hours_ahead": 8
 }

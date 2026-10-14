@@ -1,85 +1,131 @@
 blueprint:
   name: HVAC Comfort Start — Start at Computed Preheat Time (v4, RC1 target helper)
-  description: Start heating at the learned preheat time, with vacation/home/forecast logic.
+  description: Start heating at the learned preheat time only when the thermostat
+    is already in Heat mode. HCS never changes HVAC operating mode.
   domain: automation
   input:
     climate:
       name: Climate entity
       selector:
         entity:
-          domain: climate
-
+          domain:
+          - climate
+          multiple: false
+          reorder: false
     preheat_start:
       name: Preheat Start helper (input_datetime.preheat_start)
       selector:
         entity:
-          domain: input_datetime
-
+          domain:
+          - input_datetime
+          multiple: false
+          reorder: false
     target_temp_helper:
       name: Target temperature helper (input_number)
       description: Single source of truth for the comfort target temperature.
       selector:
         entity:
-          domain: input_number
-
+          domain:
+          - input_number
+          multiple: false
+          reorder: false
+    indoor_temp:
+      name: Indoor temperature sensor
+      selector:
+        entity:
+          domain:
+          - sensor
+          device_class:
+          - temperature
+          multiple: false
+          reorder: false
+    tolerance:
+      name: Near-comfort tolerance (°F-equivalent)
+      description: Do not start preheat when indoor temperature is already within
+        this tolerance of target.
+      default: 0.3
+      selector:
+        number:
+          min: 0.0
+          max: 5.0
+          step: 0.1
+          mode: box
+          unit_of_measurement: °
     vacation:
       name: Vacation boolean (input_boolean.vacation)
       selector:
         entity:
-          domain: input_boolean
-
+          domain:
+          - input_boolean
+          multiple: false
+          reorder: false
     occupied:
       name: Occupied binary_sensor (binary_sensor.family_home)
       selector:
         entity:
-          domain: binary_sensor
-
+          domain:
+          - binary_sensor
+          multiple: false
+          reorder: false
+    unoccupied_cap:
+      name: Unoccupied lead cap helper
+      selector:
+        entity:
+          domain:
+          - input_number
+          multiple: false
+          reorder: false
+    preheat_active:
+      name: Preheat Active helper
+      selector:
+        entity:
+          domain:
+          - input_boolean
+          multiple: false
+          reorder: false
 variables:
   target_temp_entity: !input target_temp_helper
-  target_temp_var: "{{ states(target_temp_entity) | float(0) }}"
-
+  indoor_temp_entity: !input indoor_temp
+  unoccupied_cap_entity: !input unoccupied_cap
+  tolerance: !input tolerance
+  target_temp_var: '{{ states(target_temp_entity) | float(0) }}'
+  tolerance_native: '{% set u = state_attr(indoor_temp_entity, ''unit_of_measurement'')
+    | string | upper %} {% set tf = tolerance | float(0.3) %} {{ (tf * 5 / 9) if u
+    in [''°C'', ''C'', ''CELSIUS''] else tf }}'
 trigger:
-  - platform: time
-    at: !input preheat_start
-
+- platform: time
+  at: !input preheat_start
+  id: scheduled
+- platform: event
+  event_type: hvac_comfort_start_start_due
+  event_data:
+    preheat_entity: !input preheat_start
+  id: catch_up
 condition:
+- condition: state
+  entity_id: !input vacation
+  state: 'off'
+- condition: state
+  entity_id: !input climate
+  state: heat
+- condition: or
+  conditions:
   - condition: state
-    entity_id: !input vacation
-    state: "off"
-
-  - condition: or 
-    conditions:
-      - condition: state
-        entity_id: !input climate
-        state: "auto"
-      - condition: state
-        entity_id: !input climate
-        state: "heat"
-        
-  - condition: or
-    conditions:
-      - condition: state
-        entity_id: !input occupied
-        state: "on"
-      - condition: template
-        value_template: >-
-          {{ states('input_number.preheat_unoccupied_cap')|float(0) > 0 }}
-
+    entity_id: !input occupied
+    state: 'on'
+  - condition: template
+    value_template: '{{ states(unoccupied_cap_entity)|float(0) > 0 }}'
+- condition: template
+  value_template: '{% set ti = states(indoor_temp_entity) | float(none) %} {% set
+    tt = states(target_temp_entity) | float(none) %} {{ ti is not none and tt is not
+    none and ti < (tt - (tolerance_native | float(0))) }}'
 action:
-  - service: climate.set_temperature
-    target:
-      entity_id: !input climate
-    data:
-      temperature: "{{ target_temp_var }}"
-
-  - service: climate.set_hvac_mode
-    target:
-      entity_id: !input climate
-    data:
-      hvac_mode: heat
-
-  - service: input_boolean.turn_on
-    target:
-      entity_id: input_boolean.preheat_active
-
+- service: climate.set_temperature
+  target:
+    entity_id: !input climate
+  data:
+    temperature: '{{ target_temp_var }}'
+- service: input_boolean.turn_on
+  target:
+    entity_id: !input preheat_active
 mode: single

@@ -1,179 +1,177 @@
 # HVAC Comfort Start — Architecture
 
-**Version:** Release Candidate 1 (RC1-004)  
-**Status:** Feature complete; maintenance mode  
+**Version:** Release Candidate 1 (RC1-005)  
 **Platform:** Home Assistant + Pyscript  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
 
----
+## Design Goal
 
-## Design Goals
+Reach the selected comfort temperature near the configured comfort time while learning from real heating behavior and avoiding contamination from post-arrival modulation, scheduling clamps, manual overrides, or stale planning state.
 
-HVAC Comfort Start was designed to solve a specific and common problem:
-
-> Reach the desired comfort temperature **at** the configured comfort time — not early, not late — across varying outdoor conditions and HVAC behavior.
-
-Key goals:
-
-- Eliminate fixed offsets and guesswork  
-- Learn from real heating cycles  
-- Remain stable across days (no oscillation)  
-- Survive restarts and configuration changes  
-- Prefer slight earliness over lateness  
-- Remain thermostat-agnostic at the Home Assistant layer  
-
----
-
-## High-Level Architecture
-
-Each layer has a single responsibility and minimal coupling to the others.
+## Layers
 
 ```
 +-------------------+
 | Planning          |
-| (Recompute)       |
+| Recompute         |
 +-------------------+
           |
           v
 +-------------------+
 | Execution         |
-| (Automations)     |
+| Blueprints        |
 +-------------------+
           |
           v
 +-------------------+
 | Learning          |
-| (Arrival Eval)    |
+| Arrival Eval      |
 +-------------------+
 ```
 
-This represents the conceptual control flow, which is expanded in the full system timeline below.
+## 1. Planning Layer
 
----
+The Pyscript controller calculates `preheat_start` from:
 
-## System Flow Overview
+- indoor temperature
+- outdoor temperature
+- comfort target
+- learned `k`
+- learned `offset_min`
+- optional forecast bias
+- occupancy
+- min/max lead helpers
+- unoccupied lead cap
+- `active_hours`
 
-<p align="center">
-  <img src="../assets/preheat-flow-detailed.png" alt="HVAC Comfort Start Detailed Flow" width="700">
-</p>
+### Recompute cadence
 
-<p align="center">
-  This flow illustrates the RC1-004 arrival-bounded learning model, where learning is strictly limited to the active heating phase.
-</p>
+RC1-005 schedules the Pyscript recompute service every 15 minutes. The service itself decides whether planning is currently allowed by checking `active_hours`.
 
----
+This replaces the RC1-004 hard-coded overnight cron window.
 
-## 1. Planning Layer — Recompute
+### Event-aware planning
 
-**Purpose:**  
-Determine *when* preheating must start in order to reach comfort temperature at comfort time.
+A separate blueprint requests immediate recompute when:
 
-**Key Inputs:**
+- the comfort target changes
+- comfort time changes
+- the configured climate entity changes HVAC mode
 
-- Current indoor temperature  
-- Target temperature (from helper)  
-- Learned heating rate (`k`)  
-- Learned systematic bias (`offset_min`)  
-- Optional forecast-based bias  
-- Occupancy state  
-- Min/max lead constraints  
+The 15-minute trigger remains the fallback.
 
-**Output:**
+### Post-comfort guard
 
-- Writes `input_datetime.preheat_start`
+After today's comfort time has passed, planning for the next cycle does not open until that next cycle's `active_hours` start.
 
----
+### Missed-start recovery
 
-## 2. Execution Layer — Automation
+If recompute determines that the correct start time has already passed, and comfort time is still ahead, Pyscript emits:
 
-**Purpose:**  
-Start and stop preheating at the correct times using Home Assistant automations.
+`hvac_comfort_start_start_due`
 
-**Responsibilities:**
+The Start blueprint listens for both the normal time trigger and this catch-up event. All normal Start conditions still apply.
 
-- Start heating when current time ≥ `preheat_start`  
-- Set `input_boolean.preheat_active`  
-- Detect arrival (threshold crossing)  
-- Clear preheat state at arrival  
-- Trigger evaluation at comfort time  
+The freeze guard also recognizes an already-stored start that has passed and requests catch-up rather than silently suppressing the cycle.
 
-**RC1-004 Behavior:**
+## 2. Execution Layer
 
-Execution includes an **arrival-stop mechanism**:
+Four automation blueprints make up the normal RC1-005 execution layer:
 
-- Detects first crossing of (target − tolerance)  
-- Marks arrival (latched, idempotent)  
-- Clears `preheat_active`  
+1. **Start at Computed Preheat Time**
+2. **Stop Learning at Arrival**
+3. **Resume/Verify at Comfort Time**
+4. **Recompute on Planning Input Changes**
 
-This defines a hard boundary between heating and post-arrival behavior.
+### Start protections
 
----
+The Start blueprint requires:
 
-## 3. Learning Layer — Arrival-Bounded Evaluation
+- vacation OFF
+- HVAC mode compatible with heating
+- occupied OR an enabled unoccupied lead cap
+- indoor temperature still below target minus tolerance
 
-### Primary Trigger
+The last condition prevents a stale or minimum-lead start from creating a pointless preheat session on a warm morning.
 
-Learning is strictly bounded to:
+### Manual OFF
 
-**preheat start → first arrival (target − tolerance)**
+A manually OFF thermostat is treated as a hard override. Start and Resume/Verify do not turn it back on.
 
-Arrival is:
+## 3. Arrival Layer
 
-- Latched once per cycle  
-- Idempotent  
-- Treated as the end of the heating phase  
+Arrival occurs at:
 
-This prevents post-arrival modulation or holding behavior from contaminating the model.
+**target − tolerance**
 
----
+The arrival-stop blueprint:
 
-### Fallback Trigger
+- detects the first threshold crossing
+- calls `pyscript.furnace_preheat_mark_arrival`
+- clears the active preheat state
 
-If arrival is not detected:
+Arrival is latched once and is idempotent.
 
-- Learning is finalized at comfort time  
+For Celsius sensors, the blueprint converts the configured °F-equivalent tolerance to native °C before evaluating the threshold.
 
----
+## 4. Learning Layer
 
-## What It Measures
+The normal learning window is:
 
-- Indoor temperature vs target  
-- Elapsed time since preheat start  
-- Effective full-cycle heating performance  
+**preheat start → first arrival**
 
----
+The model contains:
 
-## What It Updates
+- `k`: effective minutes per °F
+- `offset_min`: learned systematic timing bias
 
-- `k` — minutes per degree (heating rate)  
-- `offset_min` — systematic timing bias  
+### Celsius boundary
 
----
+RC1-005 keeps the model in °F internally so existing RC1-004 model files remain valid.
 
-## Why This Matters
+Temperature entities are normalized to °F only inside Pyscript. Home Assistant blueprints continue to operate in each entity's native displayed unit.
 
-Modulating HVAC systems reduce output after reaching target temperature.
+### Clamp-aware learning
 
-If learning continues past this point, it introduces bias.
+A cycle is marked clamped if scheduling was constrained by:
 
-RC1-004 eliminates that by learning only from the true heating phase.
+- minimum lead
+- maximum lead
+- unoccupied lead cap
+- active-hours start/end
 
----
+Clamped cycles are observation-only. They do not modify `k` or `offset_min`, because the observed timing no longer represents a free model decision.
 
-## RC1 Status
+Clamp state is carried from planning to cycle start. After a Pyscript restart, the controller can infer common clamps from the stored `preheat_start` and configured limits.
 
-RC1-004 introduces arrival-bounded learning, completing the control model.
+### Manual-OFF learning guard
 
-System is:
+If the configured thermostat is OFF at evaluation time, learning is skipped. A deliberately cold room must not be interpreted as a failed preheat cycle.
 
-- Deterministic  
-- Stable  
-- Fully bounded  
+## 5. Resume/Verify
 
-Future work (if any) focuses on usability and packaging, not algorithmic changes.
+At comfort time:
 
----
+- if the thermostat is OFF, HVAC actions are skipped
+- if target is already met, the configured resume mode is restored
+- if target is below threshold and enforcement is enabled, heat is driven to target or timeout
+- arrival evaluation is finalized
+- the selected `preheat_active` helper is cleared
 
-## Summary
+The tolerance is °F-equivalent and converted automatically for Celsius indoor sensors.
 
-HVAC Comfort Start is a small adaptive control system built on real feedback and stable learning boundaries.
+## Stability Principles
+
+RC1-005 preserves the RC1-004 model philosophy:
+
+- first-hit arrival boundary
+- late correction faster than early correction
+- slight earliness preferred over repeated lateness
+- full-cycle learning favored over transient modulation behavior
+- no learning from constrained or manually overridden cycles
+
+## Release State
+
+RC1-005 has passed accelerated sandbox regression testing across normal operation, planning edge cases, temperature-unit handling, manual overrides, and restart scenarios.
+
+The intended next milestone is `rc1-final` after release packaging and final documentation review.
