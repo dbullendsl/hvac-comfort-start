@@ -132,9 +132,9 @@ Yes. A Home Assistant schedule or automation can update `input_number.hvac_comfo
 
 Yes. RC1-005 supports both Fahrenheit and Celsius temperature entities. The internal learned model remains in minutes per °F for backward compatibility, while temperature values are converted automatically at the Pyscript boundary.
 
-### What happens if the thermostat is manually OFF?
+### What happens if the thermostat is set to Auto, Cool, or Off?
 
-Manual OFF is treated as a hard override. Comfort Start will not start heating, will not re-enable the thermostat at comfort time, and will not learn from that skipped cycle.
+Any mode other than Heat tells HVAC Comfort Start to stand down. Comfort Start will not start heating or change the HVAC operating mode. Selecting Auto returns control to the thermostat, while Cool or Off likewise prevents an HCS heating cycle from starting.
 
 ### What if the house is already near the target temperature?
 

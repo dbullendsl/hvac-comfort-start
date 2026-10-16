@@ -88,15 +88,17 @@ Four automation blueprints make up the normal RC1-005 execution layer:
 The Start blueprint requires:
 
 - vacation OFF
-- HVAC mode compatible with heating
+- HVAC mode set to **Heat**
 - occupied OR an enabled unoccupied lead cap
 - indoor temperature still below target minus tolerance
 
 The last condition prevents a stale or minimum-lead start from creating a pointless preheat session on a warm morning.
 
-### Manual OFF
+### HVAC mode requirement
 
-A manually OFF thermostat is treated as a hard override. Start and Resume/Verify do not turn it back on.
+HVAC Comfort Start operates only when the configured thermostat is already in **Heat** mode.
+
+HCS does not change the thermostat's HVAC operating mode. Selecting **Auto**, **Cool**, or **Off** removes thermostat control from HCS and leaves operation to the thermostat or other Home Assistant logic.
 
 ## 3. Arrival Layer
 
