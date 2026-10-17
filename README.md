@@ -197,3 +197,7 @@ HVAC Comfort Start is a one-person development project. AI was used as a develop
 The project was developed iteratively over many hours of hands-on testing, including accelerated overnight simulation, targeted regression testing, and validation on the author's production Home Assistant system. The simulator substantially shortened the development cycle by allowing complete heating scenarios and edge cases to be exercised repeatedly without waiting for suitable weather or overnight conditions.
 
 The project requirements, control strategy, acceptance criteria, testing decisions, and final implementation choices were directed and validated by the author. AI accelerated the engineering process; it did not replace the testing or judgment required to determine whether the system actually worked.
+
+## Support the Project
+
+HVAC Comfort Start is free and open source. If you find it useful and would like to support continued development, you can [buy me a coffee](https://buymeacoffee.com/HCS2026).
