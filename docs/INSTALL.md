@@ -19,7 +19,7 @@ This guide installs HVAC Comfort Start into Home Assistant using Pyscript and fo
 | `blueprints/Furnace Automation/*.yaml` | `/config/blueprints/automation/Furnace Automation/` |
 | `packages/furnace_preheat_helpers.yaml` | `/config/packages/furnace_preheat_helpers.yaml` |
 | `pyscript/furnace_preheat.py` | `/config/pyscript/furnace_preheat.py` |
-| `pyscript/data/furnace_preheat_config.json` | `/config/pyscript/data/furnace_preheat_config.json` |
+| `pyscript/data/furnace_preheat_config.example.json` | `/config/pyscript/data/furnace_preheat_config.json` |
 | `pyscript_modules/furnace_config_io.py` | `/config/pyscript_modules/furnace_config_io.py` |
 
 ## Step 1 — Copy Files
@@ -39,7 +39,7 @@ Restart Home Assistant if required after adding the package include.
 
 ## Step 3 — Review the Pyscript Config
 
-Edit `/config/pyscript/data/furnace_preheat_config.json` for your installation.
+Copy `pyscript/data/furnace_preheat_config.example.json` to `/config/pyscript/data/furnace_preheat_config.json`, then edit the copied file for your installation.
 
 Important fields:
 
@@ -58,11 +58,11 @@ Example:
 
 ```json
 {
-  "climate": "climate.daikin",
-  "indoor_temp": "sensor.indoor_temperature",
-  "outdoor_temp": "sensor.main_room_outdoor_air_temperature",
-  "forecast_low": "sensor.nws_overnight_low_temperature",
-  "occupied_binary": "binary_sensor.family_home",
+  "climate": "climate.your_thermostat",
+  "indoor_temp": "sensor.your_indoor_temperature",
+  "outdoor_temp": "sensor.your_outdoor_temperature",
+  "forecast_low": "sensor.your_forecast_low",
+  "occupied_binary": "binary_sensor.your_occupancy",
   "vacation": "input_boolean.vacation",
   "comfort_time": "input_datetime.comfort_time",
   "preheat_start": "input_datetime.preheat_start",
