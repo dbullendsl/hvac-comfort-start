@@ -200,4 +200,6 @@ The project requirements, control strategy, acceptance criteria, testing decisio
 
 ## Support the Project
 
-HVAC Comfort Start is free and open source. If you find it useful and would like to support continued development, you can [buy me a coffee](https://buymeacoffee.com/HCS2026).
+HVAC Comfort Start is free and open source. If you find it useful and would like to support continued development:
+
+[![Buy me a coffee](https://img.shields.io/badge/Buy_me_a_coffee-Support_HCS-FFDD00?style=for-the-badge&labelColor=FFDD00&color=FFDD00)](https://buymeacoffee.com/p0OYWxFbzt)
