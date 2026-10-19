@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-RC1-blue" alt="Status RC1">
+  <img src="https://img.shields.io/badge/status-RC1%20Final-blue" alt="Status RC1 Final">
   <img src="https://img.shields.io/badge/Home%20Assistant-Custom-41BDF5" alt="Home Assistant Custom">
   <img src="https://img.shields.io/github/v/tag/dbullendsl/hvac-comfort-start?label=release" alt="Release">
   <img src="https://img.shields.io/github/stars/dbullendsl/hvac-comfort-start?style=flat" alt="GitHub stars">
@@ -16,13 +16,13 @@
 
 ---
 
-**Status:** RC1-005 — release-candidate build  
+**Status:** RC1 Final  
 **Platform:** Home Assistant + Pyscript  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
 
 HVAC Comfort Start is an adaptive preheat controller for Home Assistant. It learns how long a home and heating system actually need to recover from setback, then schedules heating so the selected comfort temperature is reached near the configured comfort time.
 
-RC1-005 expands the stable RC1-004 release with Fahrenheit / Celsius support, more flexible planning, improved learning accuracy, stronger safety handling, and easier configuration.
+RC1 Final incorporates the RC1-005 work: Fahrenheit / Celsius support, more flexible planning, improved learning accuracy, stronger safety handling, and easier configuration.
 
 ## When This Is Most Useful
 
@@ -42,7 +42,7 @@ Comfort Start learns the recovery behavior instead of relying on a fixed early-s
 - Fahrenheit / Celsius temperature support
 - Flexible planning and automatic recalculation when important settings change
 - Improved learning accuracy by ignoring constrained or non-representative cycles
-- Stronger safety handling for manual HVAC OFF and near-comfort conditions
+- Stronger safety handling for non-Heat thermostat modes and near-comfort conditions
 - Thermostat-agnostic Home Assistant integration
 
 ## How It Works
@@ -61,7 +61,7 @@ Pyscript periodically recomputes the required preheat start from:
 - Min/max lead limits
 - Configured `active_hours`
 
-A 15-minute recompute is the fallback cadence. RC1-005 also includes a small blueprint that requests an immediate recompute when key planning inputs change.
+A 15-minute recompute is the fallback cadence. RC1 Final also includes a small blueprint that requests an immediate recompute when key planning inputs change.
 
 ### 2. Execution
 
@@ -79,7 +79,7 @@ Learning is bounded to:
 
 **preheat start → first arrival**
 
-The arrival-stop blueprint latches arrival once, then clears the active preheat state. At comfort time, Resume/Verify finalizes the cycle and updates the model.
+The arrival-stop blueprint latches the first arrival once but leaves the HCS cycle active. At comfort time, Resume/Verify finalizes learning and then clears the active preheat state.
 
 Cycles whose start time was constrained by min lead, max lead, `active_hours`, or the unoccupied lead cap are treated as **observation-only**. They do not alter `k` or `offset_min`, because their timing was constrained by policy rather than the model alone.
 
@@ -89,7 +89,7 @@ Cycles whose start time was constrained by min lead, max lead, `active_hours`, o
 
 Effective heating rate in **minutes per °F**.
 
-RC1-005 keeps the internal model in °F even on Celsius systems so existing learned model values remain valid. Temperature entities are normalized at the Pyscript boundary.
+RC1 Final keeps the internal model in °F even on Celsius systems so existing learned model values remain valid. Temperature entities are normalized at the Pyscript boundary.
 
 ### offset_min
 
@@ -103,26 +103,26 @@ Learned timing bias in minutes for effects not fully captured by `k`.
 
 ## Celsius Support
 
-RC1-005 supports Celsius temperature sensors and target helpers. Pyscript converts temperatures to internal °F for model calculations, while the blueprints compare and command temperatures in Home Assistant's native unit.
+RC1 Final supports Celsius temperature sensors and target helpers. Pyscript converts temperatures to internal °F for model calculations, while the blueprints compare and command temperatures in Home Assistant's native unit.
 
 **Important:** the supplied helper package currently defines the target helper with Fahrenheit-oriented limits and `°F`. On a Celsius installation, the target helper must instead use Celsius values and the same native unit as the indoor sensor / climate entity. See `docs/INSTALL.md`.
 
-## Manual HVAC OFF
+## Thermostat Operating Mode
 
-A manually OFF thermostat is a hard override.
+HVAC Comfort Start controls the heating setpoint only when the configured thermostat is already in **Heat** mode.
 
-When the configured climate entity is OFF:
+When the thermostat is set to **Auto, Cool, or Off**:
 
-- Preheat will not start
+- HCS will not start a preheat cycle
 - Missed-start catch-up will not start heating
-- Comfort-time Resume/Verify will not re-enable heating
-- Arrival evaluation will not learn from the cold room
+- HCS will not change the thermostat's HVAC operating mode
+- An active HCS cycle that reaches comfort-time finalization while no longer in Heat is ended without further thermostat control
 
 ## FAQ
 
 ### Can comfort time vary by day?
 
-Yes. Use any Home Assistant schedule or automation to update `input_datetime.comfort_time`. RC1-005 detects the change and recalculates the required preheat start. Comfort Start does not need its own weekday/weekend scheduler.
+Yes. Use any Home Assistant schedule or automation to update `input_datetime.comfort_time`. RC1 Final detects the change and recalculates the required preheat start. Comfort Start does not need its own weekday/weekend scheduler.
 
 ### Can the target temperature vary by day?
 
@@ -130,11 +130,19 @@ Yes. A Home Assistant schedule or automation can update `input_number.hvac_comfo
 
 ### Does Comfort Start work with Celsius?
 
-Yes. RC1-005 supports both Fahrenheit and Celsius temperature entities. The internal learned model remains in minutes per °F for backward compatibility, while temperature values are converted automatically at the Pyscript boundary.
+Yes. RC1 Final supports both Fahrenheit and Celsius temperature entities. The internal learned model remains in minutes per °F for backward compatibility, while temperature values are converted automatically at the Pyscript boundary.
 
 ### What happens if the thermostat is set to Auto, Cool, or Off?
 
 Any mode other than Heat tells HVAC Comfort Start to stand down. Comfort Start will not start heating or change the HVAC operating mode. Selecting Auto returns control to the thermostat, while Cool or Off likewise prevents an HCS heating cycle from starting.
+
+### Does HVAC Comfort Start require a special thermostat?
+
+No. HCS works through Home Assistant's standard `climate` entity model rather than requiring a particular thermostat brand. The thermostat must expose normal temperature control and HVAC mode through Home Assistant. HCS only operates while the thermostat is already in Heat mode and does not switch the thermostat between Heat, Auto, Cool, or Off.
+
+### I don’t want to modify my HVAC system or thermostat. Will this work?
+
+Yes. HCS does not require physical changes to the furnace, heat pump, thermostat wiring, or thermostat hardware. It works through Home Assistant using the existing climate entity and temperature sensors. HCS adjusts the heating setpoint at the calculated preheat time; it does not bypass thermostat safety controls or directly drive HVAC equipment.
 
 ### What if the house is already near the target temperature?
 
@@ -146,19 +154,19 @@ No. Comfort Start can use compatible Home Assistant outdoor-temperature and fore
 
 ### What happens if the calculated start time has already passed?
 
-RC1-005 can request an immediate catch-up start, while still applying the normal vacation, occupancy, thermostat-mode, and near-comfort safeguards.
+RC1 Final can request an immediate catch-up start, while still applying the normal vacation, occupancy, thermostat-mode, and near-comfort safeguards.
 
 ### Can it work when nobody is home?
 
 Yes. The unoccupied lead cap controls how much preheating is allowed when the occupancy sensor reports nobody home. Set the cap to match your preference.
 
-### Can HVAC Comfort Start be installed through HACS?
+### Can HVAC Comfort Start be installed through Home Assistant Marketplace or HACS?
 
-Not yet. RC1-005 / RC1-final uses a multi-file Home Assistant setup that includes Pyscript, blueprints, helpers, and configuration files, so installation is currently handled from the GitHub repository. A more streamlined HACS-compatible package is being considered as a separate future effort after the current release is finalized and proven in production.
+Not in RC1 Final. This release uses a multi-file Home Assistant setup that includes Pyscript, blueprints, helpers, and configuration files, so installation is currently handled from the GitHub repository. A native custom-integration version is planned as a separate follow-on project.
 
 ### Does HVAC Comfort Start support multiple HVAC systems or zones?
 
-Not yet. RC1-005 / RC1-final is designed around one heating system, one indoor temperature source, and one comfort schedule.
+Not yet. RC1 Final is designed around one heating system, one indoor temperature source, and one comfort schedule.
 
 Multi-system and multi-zone support is a future development area. A future version could allow separate learned models, targets, schedules, and preheat calculations for each zone or HVAC system while keeping the same overall control approach.
 
@@ -170,7 +178,7 @@ Instead, it learns incrementally from completed preheat cycles. After each valid
 
 That approach is useful because home heating behavior is not perfectly linear. Outdoor temperature is only one influence; wind, sun versus cloud cover, internal heat gains, building thermal mass, and other changing conditions can all affect how quickly a house warms. Rather than trying to model every variable explicitly, HVAC Comfort Start learns from the actual result of each heating cycle.
 
-The learned model persists across restarts, and cycles affected by scheduling clamps or manual HVAC OFF are excluded so they do not distort learning.
+The learned model persists across restarts, and cycles affected by scheduling clamps or an HVAC override that prevents a valid HCS cycle are excluded so they do not distort learning.
 
 ## Repository Layout
 
@@ -182,9 +190,9 @@ The learned model persists across restarts, and cycles affected by scheduling cl
 
 ## Version
 
-Current development/release-candidate version: **RC1-005**
+Current release: **RC1 Final**
 
-The intended next release milestone is `rc1-final` after final repository and installation review.
+RC1 Final is the frozen behavioral baseline for the current Pyscript/blueprint implementation. Future development can build on this baseline without changing the RC1 behavior.
 
 ## Notes
 
@@ -197,6 +205,7 @@ HVAC Comfort Start is a one-person development project. AI was used as a develop
 The project was developed iteratively over many hours of hands-on testing, including accelerated overnight simulation, targeted regression testing, and validation on the author's production Home Assistant system. The simulator substantially shortened the development cycle by allowing complete heating scenarios and edge cases to be exercised repeatedly without waiting for suitable weather or overnight conditions.
 
 The project requirements, control strategy, acceptance criteria, testing decisions, and final implementation choices were directed and validated by the author. AI accelerated the engineering process; it did not replace the testing or judgment required to determine whether the system actually worked.
+
 
 ## Support the Project
 

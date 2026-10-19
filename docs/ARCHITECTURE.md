@@ -1,6 +1,6 @@
 # HVAC Comfort Start — Architecture
 
-**Version:** Release Candidate 1 (RC1-005)  
+**Version:** RC1 Final  
 **Platform:** Home Assistant + Pyscript  
 **Compatibility:** Thermostat-agnostic (`climate` entity based)
 
@@ -46,7 +46,7 @@ The Pyscript controller calculates `preheat_start` from:
 
 ### Recompute cadence
 
-RC1-005 schedules the Pyscript recompute service every 15 minutes. The service itself decides whether planning is currently allowed by checking `active_hours`.
+RC1 Final schedules the Pyscript recompute service every 15 minutes. The service itself decides whether planning is currently allowed by checking `active_hours`.
 
 This replaces the RC1-004 hard-coded overnight cron window.
 
@@ -76,7 +76,7 @@ The freeze guard also recognizes an already-stored start that has passed and req
 
 ## 2. Execution Layer
 
-Four automation blueprints make up the normal RC1-005 execution layer:
+Four automation blueprints make up the RC1 Final execution layer:
 
 1. **Start at Computed Preheat Time**
 2. **Stop Learning at Arrival**
@@ -110,7 +110,7 @@ The arrival-stop blueprint:
 
 - detects the first threshold crossing
 - calls `pyscript.furnace_preheat_mark_arrival`
-- clears the active preheat state
+- leaves `preheat_active` ON so the cycle remains active through comfort-time finalization
 
 Arrival is latched once and is idempotent.
 
@@ -129,7 +129,7 @@ The model contains:
 
 ### Celsius boundary
 
-RC1-005 keeps the model in °F internally so existing RC1-004 model files remain valid.
+RC1 Final keeps the model in °F internally so existing RC1-004 model files remain valid.
 
 Temperature entities are normalized to °F only inside Pyscript. Home Assistant blueprints continue to operate in each entity's native displayed unit.
 
@@ -154,17 +154,18 @@ If the configured thermostat is OFF at evaluation time, learning is skipped. A d
 
 At comfort time:
 
-- if the thermostat is OFF, HVAC actions are skipped
-- if target is already met, the configured resume mode is restored
-- if target is below threshold and enforcement is enabled, heat is driven to target or timeout
-- arrival evaluation is finalized
-- the selected `preheat_active` helper is cleared
+- Resume/Verify acts only on a cycle for which `preheat_active` is ON
+- if the thermostat is no longer in **Heat**, HCS clears the active cycle and stops without changing HVAC mode
+- if the thermostat remains in Heat and the target is below threshold with enforcement enabled, HCS adjusts the heating setpoint and waits for target or timeout
+- if the target is already met, no additional heating command is required
+- arrival evaluation is finalized when appropriate
+- the selected `preheat_active` helper is cleared at the end of finalization
 
-The tolerance is °F-equivalent and converted automatically for Celsius indoor sensors.
+Resume/Verify never changes the thermostat's HVAC operating mode. Optional preset restoration remains separate from HVAC mode. The tolerance is °F-equivalent and converted automatically for Celsius indoor sensors.
 
 ## Stability Principles
 
-RC1-005 preserves the RC1-004 model philosophy:
+RC1 Final preserves the RC1-004 model philosophy:
 
 - first-hit arrival boundary
 - late correction faster than early correction
@@ -174,6 +175,6 @@ RC1-005 preserves the RC1-004 model philosophy:
 
 ## Release State
 
-RC1-005 has passed accelerated sandbox regression testing across normal operation, planning edge cases, temperature-unit handling, manual overrides, and restart scenarios.
+RC1 Final has passed accelerated sandbox regression testing across normal operation, planning edge cases, temperature-unit handling, manual overrides, and restart scenarios, followed by production validation of the Heat-only control path.
 
-The intended next milestone is `rc1-final` after release packaging and final documentation review.
+This document describes the frozen behavior of the RC1 Pyscript/blueprint release.

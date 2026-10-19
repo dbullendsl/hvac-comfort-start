@@ -1,4 +1,4 @@
-# HVAC Comfort Start — Installation Guide (RC1-005)
+# HVAC Comfort Start — Installation Guide (RC1 Final)
 
 This guide installs HVAC Comfort Start into Home Assistant using Pyscript and four automation blueprints.
 
@@ -21,6 +21,7 @@ This guide installs HVAC Comfort Start into Home Assistant using Pyscript and fo
 | `pyscript/furnace_preheat.py` | `/config/pyscript/furnace_preheat.py` |
 | `pyscript/data/furnace_preheat_config.example.json` | `/config/pyscript/data/furnace_preheat_config.json` |
 | `pyscript_modules/furnace_config_io.py` | `/config/pyscript_modules/furnace_config_io.py` |
+| `pyscript_modules/diag_csv_writer.py` | `/config/pyscript_modules/diag_csv_writer.py` |
 
 ## Step 1 — Copy Files
 
@@ -75,7 +76,7 @@ Example:
 
 ### active_hours
 
-`active_hours` is the planning window. RC1-005 no longer has a hard-coded 02:00–07:59 recompute window.
+`active_hours` is the planning window. RC1 Final has no hard-coded 02:00–07:59 recompute window.
 
 The supplied example uses 01:00–23:00. Choose a window that allows the earliest legitimate start for your schedule.
 
@@ -113,7 +114,7 @@ The supplied package creates:
 
 ## Fahrenheit and Celsius
 
-RC1-005 Pyscript supports both Fahrenheit and Celsius temperature entities. The learned model remains minutes per °F internally.
+RC1 Final Pyscript supports both Fahrenheit and Celsius temperature entities. The learned model remains minutes per °F internally.
 
 The Home Assistant blueprints operate in native entity units, so the **target helper must use the same temperature scale as the indoor sensor and climate entity**.
 
@@ -144,7 +145,7 @@ hvac_comfort_start_target_temp:
   icon: mdi:thermometer
 ```
 
-Do not convert the learned model JSON manually. RC1-005 performs the temperature conversion at runtime.
+Do not convert the learned model JSON manually. RC1 Final performs the temperature conversion at runtime.
 
 ## Step 7 — Verify Operation
 
@@ -155,13 +156,14 @@ Confirm:
 - heating starts at the computed time
 - a missed start catches up immediately while comfort time is still ahead
 - arrival is detected at target minus tolerance
-- `preheat_active` clears at arrival
-- Resume/Verify runs at comfort time
-- a manually OFF thermostat remains OFF
+- `preheat_active` turns ON at HCS start and remains ON through the arrival latch
+- Resume/Verify runs at comfort time and clears `preheat_active`
+- HCS never changes the thermostat's HVAC operating mode
+- Auto, Cool, or Off prevent HCS from starting heating
 
 ## Learning and Clamps
 
-If a cycle is constrained by min lead, max lead, active-hours boundaries, or the unoccupied lead cap, RC1-005 will not learn `k` or `offset_min` from that cycle.
+If a cycle is constrained by min lead, max lead, active-hours boundaries, or the unoccupied lead cap, RC1 Final will not learn `k` or `offset_min` from that cycle.
 
 This is intentional: a constrained start does not represent an unconstrained model prediction.
 
