@@ -217,6 +217,7 @@ action:
       entity_id: !input climate
     data:
       preset_mode: '{{ resume_preset_mode }}'
+    continue_on_error: true
 - service: input_boolean.turn_off
   target:
     entity_id: !input preheat_active
